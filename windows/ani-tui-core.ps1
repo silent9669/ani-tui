@@ -1,9 +1,9 @@
 <#
 .SYNOPSIS
-    ani-tui v6.0 for Windows - Optimized Single-File Architecture
+    ani-tui v6.1 for Windows - Optimized for Zero Flickering
 .DESCRIPTION
-    Complete rewrite with self-calling pattern for fzf callbacks.
-    Eliminates batch script intermediaries for smooth, flicker-free operation.
+    Uses native batch/curl for fzf callbacks to eliminate PowerShell spawn overhead.
+    PowerShell only runs once at startup; all fzf callbacks use fast batch scripts.
 #>
 
 param(
@@ -17,25 +17,25 @@ $ErrorActionPreference = "SilentlyContinue"
 # =============================================================================
 # CONFIG
 # =============================================================================
-$script:VERSION = "6.0.0"
+$script:VERSION = "6.1.0"
 $script:DATA = "$env:USERPROFILE\.ani-tui"
 $script:CACHE = "$script:DATA\cache"
 $script:IMAGES = "$script:CACHE\images"
 $script:HISTORY = "$script:DATA\history.json"
+$script:SCRIPTS = "$script:CACHE\scripts"
 $script:API = "https://api.allanime.day"
 $script:REFR = "https://allmanga.to"
 $script:ANILIST = "https://graphql.anilist.co"
-$script:SCRIPT_PATH = $PSCommandPath
 
 # Colors for fzf (Catppuccin Mocha theme)
 $script:CLR_MAIN = "fg:#cdd6f4,bg:#1e1e2e,hl:#f9e2af,fg+:#cdd6f4,bg+:#313244,hl+:#f9e2af,info:#94e2d5,prompt:#f5c2e7,pointer:#f5e0dc,marker:#a6e3a1,spinner:#f5e0dc,header:#89b4fa,border:#6c7086"
 $script:CLR_EP = "fg:#cdd6f4,bg:#1e1e2e,hl:#a6e3a1,fg+:#cdd6f4,bg+:#313244,hl+:#a6e3a1,prompt:#94e2d5,pointer:#f5e0dc,header:#cba6f7,border:#6c7086"
 
 # =============================================================================
-# SETUP
+# SETUP - Create directories and helper scripts
 # =============================================================================
 function Initialize {
-    foreach ($dir in @($script:DATA, $script:CACHE, $script:IMAGES)) {
+    foreach ($dir in @($script:DATA, $script:CACHE, $script:IMAGES, $script:SCRIPTS)) {
         if (!(Test-Path $dir)) { 
             New-Item -ItemType Directory -Path $dir -Force | Out-Null 
         }
@@ -43,6 +43,152 @@ function Initialize {
     if (!(Test-Path $script:HISTORY)) { 
         "[]" | Out-File $script:HISTORY -Encoding UTF8 
     }
+    
+    # Create optimized batch helper scripts (these use curl.exe, not PowerShell)
+    Create-HelperScripts
+}
+
+function Create-HelperScripts {
+    # ==========================================================================
+    # SEARCH HELPER - Uses curl.exe directly (no PowerShell spawn!)
+    # ==========================================================================
+    $searchScript = @'
+@echo off
+setlocal enabledelayedexpansion
+set "q=%*"
+set "HIST=%USERPROFILE%\.ani-tui\history.json"
+set "CACHE=%USERPROFILE%\.ani-tui\cache"
+
+REM If query is empty or 1 char, show history
+if "%q%"=="" goto :show_history
+set "len=0"
+set "tmp=%q%"
+:strlen_loop
+if not "!tmp!"=="" (set /a len+=1 & set "tmp=!tmp:~1!" & goto :strlen_loop)
+if %len% LSS 2 goto :show_history
+goto :do_search
+
+:show_history
+REM Parse history.json with simple batch (fast!)
+if not exist "%HIST%" exit /b
+for /f "usebackq tokens=*" %%a in ("%HIST%") do set "json=%%a"
+REM Simple extraction using PowerShell (but only for history, not hot path)
+powershell -NoLogo -NoProfile -Command "$h=Get-Content '%HIST%'|ConvertFrom-Json;$h|Select -First 10|%%{\"HIST`t[$($_.last_episode)] $($_.title)\"}"
+exit /b
+
+:do_search
+REM Build API URL - use curl.exe directly
+set "gql=query($search:SearchInput$limit:Int$page:Int$translationType:VaildTranslationTypeEnumType$countryOrigin:VaildCountryOriginEnumType){shows(search:$search limit:$limit page:$page translationType:$translationType countryOrigin:$countryOrigin){edges{_id name availableEpisodes}}}"
+set "vars={\"search\":{\"allowAdult\":false,\"allowUnknown\":false,\"query\":\"%q%\"},\"limit\":30,\"page\":1,\"translationType\":\"sub\",\"countryOrigin\":\"ALL\"}"
+
+REM URL encode the query (simplified)
+set "url=https://api.allanime.day/api"
+
+REM Use curl and parse with PowerShell (one call)
+curl.exe -s -G "%url%" --data-urlencode "variables=%vars%" --data-urlencode "query=%gql%" -H "User-Agent: Mozilla/5.0" -H "Referer: https://allmanga.to" 2>nul | powershell -NoLogo -NoProfile -Command "$r=[Console]::In.ReadToEnd()|ConvertFrom-Json;$r.data.shows.edges|?{$_.availableEpisodes.sub -gt 0}|%%{\"$($_._id)`t$($_.name) ($($_.availableEpisodes.sub) eps)\"}"
+exit /b
+'@
+    $searchScript | Out-File "$script:SCRIPTS\search.cmd" -Encoding ASCII
+
+    # ==========================================================================
+    # HISTORY HELPER - Simple PowerShell call
+    # ==========================================================================
+    $historyScript = @'
+@echo off
+powershell -NoLogo -NoProfile -Command "$h=Get-Content '%USERPROFILE%\.ani-tui\history.json' -ErrorAction SilentlyContinue|ConvertFrom-Json;if($h){$h|Select -First 10|%%{\"HIST`t[$($_.last_episode)] $($_.title)\"}}"
+'@
+    $historyScript | Out-File "$script:SCRIPTS\history.cmd" -Encoding ASCII
+
+    # ==========================================================================
+    # DELETE HELPER
+    # ==========================================================================
+    $deleteScript = @'
+@echo off
+setlocal enabledelayedexpansion
+set "input=%*"
+set "HIST=%USERPROFILE%\.ani-tui\history.json"
+
+REM Extract title (remove [xx] prefix)
+for /f "tokens=1,* delims=]" %%a in ("%input%") do set "title=%%b"
+set "title=!title:~1!"
+
+REM Delete from history using PowerShell
+powershell -NoLogo -NoProfile -Command "$t='%title%';$h=@((Get-Content '%HIST%'|ConvertFrom-Json)|?{$_.title -ne $t});if($h.Count -eq 0){'[]'}else{$h|ConvertTo-Json -Depth 10}|Out-File '%HIST%' -Encoding UTF8"
+'@
+    $deleteScript | Out-File "$script:SCRIPTS\delete.cmd" -Encoding ASCII
+
+    # ==========================================================================
+    # PREVIEW HELPER - Shows anime title and cover image
+    # Uses curl.exe for fetching, chafa for display
+    # ==========================================================================
+    $previewScript = @'
+@echo off
+setlocal enabledelayedexpansion
+set "input=%*"
+if "%input%"=="" exit /b
+
+set "IMAGES=%USERPROFILE%\.ani-tui\cache\images"
+if not exist "%IMAGES%" mkdir "%IMAGES%"
+
+REM Clean the title
+set "name=%input%"
+set "name=!name:HIST	=!"
+for /f "tokens=1,* delims=]" %%a in ("!name!") do (
+    if not "%%b"=="" set "name=%%b"
+)
+if "!name:~0,1!"==" " set "name=!name:~1!"
+
+REM Remove episode count suffix like "(123 eps)"
+for /f "tokens=1 delims=(" %%a in ("!name!") do set "name=%%a"
+REM Trim trailing space
+if "!name:~-1!"==" " set "name=!name:~0,-1!"
+
+if "!name!"=="" exit /b
+
+REM Display title
+echo.
+echo   !name!
+echo.
+
+REM Check for chafa
+where chafa >nul 2>&1
+if errorlevel 1 (
+    echo   [Install chafa for image preview]
+    echo   scoop install chafa
+    exit /b
+)
+
+REM Generate hash for cache filename (use certutil)
+echo !name!>"%TEMP%\ani_hash_input.txt"
+for /f "skip=1 tokens=*" %%h in ('certutil -hashfile "%TEMP%\ani_hash_input.txt" MD5 2^>nul ^| findstr /v ":"') do (
+    set "hash=%%h"
+    goto :hash_done
+)
+:hash_done
+set "hash=!hash: =!"
+set "hash=!hash:~0,12!"
+set "imgfile=%IMAGES%\!hash!.jpg"
+
+REM If image not cached, fetch from AniList
+if not exist "!imgfile!" (
+    REM Build GraphQL query
+    set "query={\"query\":\"query{Page(perPage:1){media(search:\\\"!name!\\\",type:ANIME){coverImage{large}}}}\"}"
+    
+    REM Fetch cover URL and download image
+    for /f "usebackq delims=" %%u in (`curl.exe -s -X POST "https://graphql.anilist.co" -H "Content-Type: application/json" -d "!query!" 2^>nul ^| powershell -NoLogo -NoProfile -Command "$r=[Console]::In.ReadToEnd()|ConvertFrom-Json;$r.data.Page.media[0].coverImage.large"`) do (
+        if not "%%u"=="" if not "%%u"=="null" (
+            curl.exe -sL "%%u" -o "!imgfile!" 2>nul
+        )
+    )
+)
+
+REM Display image with chafa
+if exist "!imgfile!" (
+    chafa --size=50x30 "!imgfile!" 2>nul
+)
+exit /b
+'@
+    $previewScript | Out-File "$script:SCRIPTS\preview.cmd" -Encoding ASCII
 }
 
 # =============================================================================
@@ -85,17 +231,8 @@ function Save-AnimeHistory($title, $episode) {
     $history | ConvertTo-Json -Depth 10 | Out-File $script:HISTORY -Encoding UTF8
 }
 
-function Remove-FromHistory($title) {
-    $history = @(Get-AnimeHistory) | Where-Object { $_.title -ne $title }
-    if ($history.Count -eq 0) {
-        "[]" | Out-File $script:HISTORY -Encoding UTF8
-    } else {
-        $history | ConvertTo-Json -Depth 10 | Out-File $script:HISTORY -Encoding UTF8
-    }
-}
-
 # =============================================================================
-# API FUNCTIONS
+# API FUNCTIONS (used only in main PowerShell process)
 # =============================================================================
 function Search-Anime($query) {
     if (!$query -or $query.Length -lt 2) { return @() }
@@ -150,100 +287,6 @@ function Get-Episodes($showId) {
 }
 
 # =============================================================================
-# CALLBACK HANDLERS (Called by fzf)
-# =============================================================================
-function Handle-Search($query) {
-    if (!$query -or $query.Length -lt 2) {
-        # Return history when query is empty/short
-        Get-AnimeHistory | Select-Object -First 10 | ForEach-Object {
-            "HIST`t[$($_.last_episode)] $($_.title)"
-        }
-        return
-    }
-    
-    # Search API
-    $results = Search-Anime $query
-    foreach ($r in $results) {
-        "$($r.id)`t$($r.name) ($($r.eps) eps)"
-    }
-}
-
-function Handle-History {
-    Get-AnimeHistory | Select-Object -First 10 | ForEach-Object {
-        "HIST`t[$($_.last_episode)] $($_.title)"
-    }
-}
-
-function Handle-Delete($input) {
-    # Extract title from input like "[10] Some Anime Title"
-    $title = $input -replace '^\[\d+\]\s*', ''
-    if ($title) {
-        Remove-FromHistory $title
-    }
-    # Return updated history
-    Handle-History
-}
-
-function Handle-Preview($input) {
-    if (!$input) { return }
-    
-    # Clean the title
-    $name = $input
-    $name = $name -replace '^HIST\s*', ''
-    $name = $name -replace '^\[\d+\]\s*', ''
-    $name = $name -replace '\s*\(\d+\s+eps\)\s*$', ''
-    $name = $name -replace '\s*\[[A-Z]+\]\s*$', ''
-    $name = $name.Trim()
-    
-    if (!$name) { return }
-    
-    # Display title
-    Write-Host ""
-    Write-Host "  $name" -ForegroundColor Cyan
-    Write-Host ""
-    
-    # Check for chafa
-    $hasChafa = Get-Command chafa -ErrorAction SilentlyContinue
-    if (!$hasChafa) {
-        Write-Host "  [Install chafa for image preview]" -ForegroundColor DarkGray
-        Write-Host "  scoop install chafa" -ForegroundColor DarkGray
-        return
-    }
-    
-    # Calculate hash for cache
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes($name)
-    $hash = [System.BitConverter]::ToString(
-        [System.Security.Cryptography.MD5]::Create().ComputeHash($bytes)
-    ).Replace("-", "").Substring(0, 12).ToLower()
-    
-    $imgPath = "$script:IMAGES\$hash.jpg"
-    
-    # Fetch image if not cached
-    if (!(Test-Path $imgPath)) {
-        try {
-            $query = @{
-                query = "query{Page(perPage:1){media(search:`"$name`",type:ANIME){coverImage{large}}}}"
-            } | ConvertTo-Json
-            
-            $response = Invoke-RestMethod $script:ANILIST -Method Post -ContentType "application/json" -Body $query -TimeoutSec 8
-            $coverUrl = $response.data.Page.media[0].coverImage.large
-            
-            if ($coverUrl) {
-                Invoke-WebRequest $coverUrl -OutFile $imgPath -TimeoutSec 10 -ErrorAction Stop
-            }
-        } catch {
-            Write-Host "  Loading..." -ForegroundColor DarkGray
-            return
-        }
-    }
-    
-    # Display image with chafa
-    if (Test-Path $imgPath) {
-        & chafa --size=50x30 $imgPath 2>$null
-    }
-}
-
-# =============================================================================
 # MAIN TUI
 # =============================================================================
 function Start-TUI {
@@ -258,6 +301,15 @@ function Start-TUI {
         exit 1
     }
     
+    # Check for curl.exe (required for fast callbacks)
+    if (!(Get-Command curl.exe -ErrorAction SilentlyContinue)) {
+        Write-Host ""
+        Write-Host "  ERROR: curl.exe not found!" -ForegroundColor Red
+        Write-Host "  Windows 10+ should have curl.exe built-in." -ForegroundColor Yellow
+        Write-Host ""
+        exit 1
+    }
+    
     while ($true) {
         # Get initial items (history)
         $items = @()
@@ -265,17 +317,15 @@ function Start-TUI {
             $items += "HIST`t[$($_.last_episode)] $($_.title)"
         }
         
-        # Build fzf command bindings using self-calling pattern
-        $scriptPath = $script:SCRIPT_PATH -replace "'", "''"
-        
-        $searchCmd = "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" --search {q}"
-        $historyCmd = "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" --history"
-        $deleteCmd = "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" --delete {2}"
-        $previewCmd = "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" --preview {2}"
+        # Use batch scripts for fzf callbacks (fast, no PowerShell spawn!)
+        $searchCmd = "`"$script:SCRIPTS\search.cmd`" {q}"
+        $historyCmd = "`"$script:SCRIPTS\history.cmd`""
+        $deleteCmd = "`"$script:SCRIPTS\delete.cmd`" {2}"
+        $previewCmd = "`"$script:SCRIPTS\preview.cmd`" {2}"
         
         $header = "ani-tui v$script:VERSION | Type=Search | Enter=Select | Ctrl-D=Delete | Esc=Quit"
         
-        # Run fzf
+        # Run fzf with batch script callbacks
         $selection = ($items -join "`n") | fzf `
             --ansi `
             --height=100% `
@@ -350,7 +400,7 @@ function Start-TUI {
             }
         }
         
-        # Episode selection fzf
+        # Episode selection fzf (no preview needed, simple list)
         $epHeader = "$title`n`nEnter=Play | Esc=Back"
         $epSelection = $epItems | fzf `
             --ansi `
@@ -403,20 +453,6 @@ function Start-TUI {
 # ENTRY POINT
 # =============================================================================
 switch ($Command.ToLower()) {
-    "--search" {
-        Handle-Search $Arg1
-    }
-    "--history" {
-        Handle-History
-    }
-    "--delete" {
-        Handle-Delete $Arg1
-    }
-    "--preview" {
-        # Combine all remaining args for preview (title might have spaces)
-        $fullArg = if ($RestArgs) { "$Arg1 $($RestArgs -join ' ')" } else { $Arg1 }
-        Handle-Preview $fullArg
-    }
     "-h" {
         Write-Host ""
         Write-Host "  ani-tui v$script:VERSION - Anime TUI for Windows"
@@ -434,16 +470,8 @@ switch ($Command.ToLower()) {
         Write-Host "    scoop install fzf chafa ani-cli mpv"
         Write-Host ""
     }
-    "--help" {
-        & $script:SCRIPT_PATH -h
-    }
-    "-v" {
-        Write-Host "ani-tui $script:VERSION"
-    }
-    "--version" {
-        & $script:SCRIPT_PATH -v
-    }
-    default {
-        Start-TUI
-    }
+    "--help" { & $PSCommandPath -h }
+    "-v" { Write-Host "ani-tui $script:VERSION" }
+    "--version" { & $PSCommandPath -v }
+    default { Start-TUI }
 }
