@@ -347,8 +347,8 @@ function Show-FuzzyMenu {
         
         for ($i = $startIndex; $i -lt $endIndex; $i++) {
             $display = & $DisplayFormatter $filteredItems[$i]
-            if ($i -eq $selectedIndex) {
-                Write-Host "  ▶ " -ForegroundColor Green -NoNewline
+        if ($i -eq $selectedIndex) {
+                Write-Host "  > " -ForegroundColor Green -NoNewline
                 Write-Host $display -ForegroundColor White
             }
             else {
@@ -359,7 +359,7 @@ function Show-FuzzyMenu {
         # Show preview if available
         if ($OnPreview -and $filteredItems.Count -gt 0) {
             Write-Host ""
-            Write-Host "  ─────────────────────────────────────" -ForegroundColor DarkGray
+            Write-Host "  -------------------------------------" -ForegroundColor DarkGray
             & $OnPreview $filteredItems[$selectedIndex]
         }
         
@@ -430,20 +430,26 @@ function Invoke-SearchMode {
     }
     
     # Show selection menu
-    $selected = Show-FuzzyMenu -Items $results -Header "🎬 Search Results for: $Query" `
+    $selected = Show-FuzzyMenu -Items $results -Header "[SEARCH] Results for: $Query" `
         -DisplayFormatter { 
             param($item)
             $title = if ($item.title.english) { $item.title.english } else { $item.title.romaji }
-            "$($item.id) - $title ($($item.episodes ?? '?') eps) [$($item.status)]"
+            $eps = if ($item.episodes) { $item.episodes } else { '?' }
+            "$($item.id) - $title ($eps eps) [$($item.status)]"
         } `
         -OnPreview {
             param($item)
             $title = if ($item.title.english) { $item.title.english } else { $item.title.romaji }
             Write-Host "  Title: " -NoNewline -ForegroundColor Green
             Write-Host $title -ForegroundColor White
-            Write-Host "  Episodes: $($item.episodes ?? 'Unknown')" -ForegroundColor Gray
+            
+            $eps = if ($item.episodes) { $item.episodes } else { 'Unknown' }
+            Write-Host "  Episodes: $eps" -ForegroundColor Gray
+            
             Write-Host "  Status: $($item.status)" -ForegroundColor Gray
-            Write-Host "  Score: $($item.averageScore ?? 'N/A')/100" -ForegroundColor Gray
+            
+            $score = if ($item.averageScore) { $item.averageScore } else { 'N/A' }
+            Write-Host "  Score: $score/100" -ForegroundColor Gray
             if ($item.genres) {
                 Write-Host "  Genres: $($item.genres -join ', ')" -ForegroundColor Gray
             }
@@ -485,7 +491,7 @@ function Invoke-DashboardMode {
     
     Write-Info "Loading dashboard with $($history.Count) anime..."
     
-    $selected = Show-FuzzyMenu -Items $history -Header "📺 Watched Anime Dashboard" `
+    $selected = Show-FuzzyMenu -Items $history -Header "[DASHBOARD] Watched Anime" `
         -DisplayFormatter {
             param($item)
             "$($item.id) - $($item.title) (Ep: $($item.last_episode)) [$($item.last_watched.Substring(0, 10))]"
