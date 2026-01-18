@@ -7,12 +7,23 @@
 VERSION="5.1.0"
 
 # Paths
-SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-ANI_CLI="${SCRIPT_DIR}/ani-tui/ani-cli"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+BREW_LIBEXEC="$(dirname "$SCRIPT_DIR")/libexec"
 CACHE="${HOME}/.cache/ani-tui"
 IMAGES="${CACHE}/images"
 DATA="${HOME}/.local/share/ani-tui"
 HISTORY="${DATA}/history.json"
+
+# Find ani-cli (check multiple locations)
+if [[ -f "${BREW_LIBEXEC}/ani-cli" ]]; then
+    ANI_CLI="${BREW_LIBEXEC}/ani-cli"
+elif [[ -f "${SCRIPT_DIR}/../ani-tui/ani-cli" ]]; then
+    ANI_CLI="${SCRIPT_DIR}/../ani-tui/ani-cli"
+elif [[ -f "${SCRIPT_DIR}/ani-tui/ani-cli" ]]; then
+    ANI_CLI="${SCRIPT_DIR}/ani-tui/ani-cli"
+else
+    ANI_CLI=""
+fi
 
 # API
 AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0"
@@ -27,7 +38,7 @@ mkdir -p "$CACHE" "$IMAGES" "$DATA"
 for cmd in curl jq fzf; do
     command -v "$cmd" &>/dev/null || { echo "Missing: $cmd (brew install $cmd)"; exit 1; }
 done
-[[ -f "$ANI_CLI" ]] || { echo "ani-cli not found. Clone: git clone https://github.com/pystardust/ani-cli ani-tui"; exit 1; }
+[[ -n "$ANI_CLI" && -f "$ANI_CLI" ]] || { echo "ani-cli not found. Run: brew reinstall ani-tui"; exit 1; }
 chmod +x "$ANI_CLI" 2>/dev/null
 
 # =============================================================================
