@@ -472,7 +472,29 @@ function Invoke-SearchMode {
     if ($episode) {
         $coverUrl = $selected.coverImage.large
         Add-WatchHistory -AnimeId $selected.id -Title $title -Episode ([int]$episode) -CoverUrl $coverUrl
-        Write-Success "Recorded: Episode $episode of $title"
+        
+        # STREAMING LOGIC
+        if (Get-Command "ani-cli" -ErrorAction SilentlyContinue) {
+            Write-Info "Launching ani-cli for streaming..."
+            # Try to pass title and episode. Syntax depends on ani-cli version, but generally "ani-cli title" works.
+            # We interactively launch it.
+            # Ideally: ani-cli -e <ep> <title>
+            Write-Host "Calling: ani-cli -e $episode `"$title`"" -ForegroundColor DarkGray
+            
+            # Start ani-cli in a new process to ensure it handles TUI correctly
+            Start-Process "ani-cli" -ArgumentList "-e", "$episode", "`"$title`"" -Wait -NoNewWindow
+        }
+        else {
+            Write-Success "Recorded: Episode $episode of $title (History Only)"
+            Write-Host ""
+            Write-Warn "Streamer 'ani-cli' not found."
+            Write-Host "To enable video streaming on Windows:" -ForegroundColor Cyan
+            Write-Host "  scoop bucket add extras"
+            Write-Host "  scoop install ani-cli mpv"
+            Write-Host ""
+            Write-Host "Press Enter to continue..."
+            Read-Host | Out-Null
+        }
     }
 }
 

@@ -84,6 +84,14 @@ If you see errors like "destination path already exists" or "Unexpected token", 
 Remove-Item "$env:USERPROFILE\.ani-tui" -Recurse -Force -ErrorAction SilentlyContinue; mkdir "$env:USERPROFILE\.ani-tui" -Force; Invoke-WebRequest "https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/ani-tui.ps1" -OutFile "$env:USERPROFILE\.ani-tui\ani-tui.ps1"; powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.ani-tui\ani-tui.ps1"
 ```
 
+### Streaming on Windows (Optional)
+To enable video streaming (like macOS), install `ani-cli` and `mpv` using Scoop:
+```powershell
+scoop bucket add extras
+scoop install ani-cli mpv
+```
+Once installed, `ani-tui` will automatically use `ani-cli` to play episodes.
+
 ---
 
 ## Usage
