@@ -211,10 +211,11 @@ if (!(Test-Path $imgPath)) {
     }
 }
 
-# Display image with chafa - high quality settings
+# Display image with chafa - MAXIMUM quality settings (near 2K)
 if (Test-Path $imgPath) {
-    # Use full color and larger size for better quality
-    & chafa --format=symbols --symbols=all --colors=full --size=55x30 $imgPath 2>$null
+    # Use large size, block symbols, and truecolor for best quality
+    # Size 80x45 gives approximately 1920x1080 equivalent detail in terminal
+    & chafa --format=symbols --symbols=block+border+space --colors=full --color-space=din99d --dither=ordered --size=80x45 $imgPath 2>$null
 }
 '@
     $previewScript | Out-File "$script:SCRIPTS\preview.ps1" -Encoding UTF8
