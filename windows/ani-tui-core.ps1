@@ -211,11 +211,20 @@ if (!(Test-Path $imgPath)) {
     }
 }
 
-# Display image with chafa - MAXIMUM quality settings (near 2K)
+# Display image with chafa using SIXEL format (native Windows Terminal support)
+# Sixel provides true image quality, not ASCII art
 if (Test-Path $imgPath) {
-    # Use large size, block symbols, and truecolor for best quality
-    # Size 80x45 gives approximately 1920x1080 equivalent detail in terminal
-    & chafa --format=symbols --symbols=block+border+space --colors=full --color-space=din99d --dither=ordered --size=80x45 $imgPath 2>$null
+    # Try Sixel first (Windows Terminal 1.22+ supports this natively)
+    # --format=sixels gives true image rendering, not character-based approximation
+    # --size controls the output size in terminal cells
+    $output = & chafa --format=sixels --size=70x40 $imgPath 2>&1
+    
+    # If sixel output is empty or failed, fall back to symbols (for older terminals)
+    if (!$output -or $output -match "error|not supported") {
+        & chafa --format=symbols --symbols=block --colors=full --size=70x40 $imgPath 2>$null
+    } else {
+        Write-Output $output
+    }
 }
 '@
     $previewScript | Out-File "$script:SCRIPTS\preview.ps1" -Encoding UTF8
