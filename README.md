@@ -48,49 +48,85 @@ ln -sf ~/.local/share/ani-tui/macos/ani-tui /usr/local/bin/ani-tui
 ani-tui
 ```
 
-### Windows
+---
 
-**Option 1: PowerShell (Recommended)**
-1. Open **PowerShell** (Search for "PowerShell" in Start Menu)
-2. Run the following commands:
+## Windows Installation
+
+### Quick Install (Recommended)
+
+Open **PowerShell** and run:
+
 ```powershell
-git clone https://github.com/silent9669/ani-tui.git "$env:USERPROFILE\.ani-tui"
-& "$env:USERPROFILE\.ani-tui\windows\ani-tui.ps1"
+Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
+iex (irm https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/install-windows.ps1)
 ```
 
-**Option 2: Command Prompt (cmd)**
-1. Open **Command Prompt** (cmd.exe)
-2. Run the following commands:
-```cmd
-git clone https://github.com/silent9669/ani-tui.git "%USERPROFILE%\.ani-tui"
-powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\.ani-tui\windows\ani-tui.ps1"
-```
+This will:
+- Install ani-tui and add to PATH
+- Install [Scoop](https://scoop.sh) if not present
+- Install all dependencies: `fzf`, `chafa`, `ani-cli`, `mpv`
 
-**Option 3: Automated Installer (Recommended)**
-This will install `ani-tui`, add it to PATH, and automatically install `ani-cli` + `mpv` for streaming support.
+**Restart your terminal**, then run:
 ```powershell
-Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force; iex (irm https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/install-windows.ps1)
+ani-tui
 ```
 
-**Option 4: Curl Install (Command Prompt)**
-Paste this into **cmd.exe**:
-```cmd
-if not exist "%USERPROFILE%\.ani-tui" mkdir "%USERPROFILE%\.ani-tui" & curl -L -o "%USERPROFILE%\.ani-tui\ani-tui.ps1" "https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/ani-tui.ps1" & powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\.ani-tui\ani-tui.ps1"
+### Manual Install
+
+If you prefer manual installation:
+
+```powershell
+# 1. Install Scoop (package manager)
+Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
+irm get.scoop.sh | iex
+
+# 2. Install dependencies
+scoop bucket add extras
+scoop install fzf chafa ani-cli mpv
+
+# 3. Download ani-tui
+mkdir "$env:USERPROFILE\.ani-tui\bin" -Force
+Invoke-WebRequest "https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/ani-tui.ps1" -OutFile "$env:USERPROFILE\.ani-tui\bin\ani-tui.ps1"
+
+# 4. Create launcher batch file
+'@echo off`npowershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0ani-tui.ps1" %*' | Out-File "$env:USERPROFILE\.ani-tui\bin\ani-tui.cmd" -Encoding ASCII
+
+# 5. Add to PATH
+$path = [Environment]::GetEnvironmentVariable("PATH", "User")
+[Environment]::SetEnvironmentVariable("PATH", "$path;$env:USERPROFILE\.ani-tui\bin", "User")
+
+# 6. Restart terminal and run
+ani-tui
+```
+
+### Windows Dependencies
+
+| Package | Purpose | Required | Install |
+|---------|---------|----------|---------|
+| fzf | Fuzzy finder TUI | ✅ Yes | `scoop install fzf` |
+| chafa | Image previews | Optional | `scoop install chafa` |
+| ani-cli | Streaming | Optional | `scoop install ani-cli` |
+| mpv | Video player | Optional | `scoop install mpv` |
+
+**Install all at once:**
+```powershell
+scoop bucket add extras
+scoop install fzf chafa ani-cli mpv
 ```
 
 ### Windows Troubleshooting
-If you see errors like "destination path already exists" or "Unexpected token", run this **Clean Reinstall** command in PowerShell:
+
+**Clean Reinstall:**
 ```powershell
-Remove-Item "$env:USERPROFILE\.ani-tui" -Recurse -Force -ErrorAction SilentlyContinue; mkdir "$env:USERPROFILE\.ani-tui" -Force; Invoke-WebRequest "https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/ani-tui.ps1" -OutFile "$env:USERPROFILE\.ani-tui\ani-tui.ps1"; powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.ani-tui\ani-tui.ps1"
+Remove-Item "$env:USERPROFILE\.ani-tui" -Recurse -Force -ErrorAction SilentlyContinue
+iex (irm https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/install-windows.ps1)
 ```
 
-### Streaming on Windows (Optional)
-To enable video streaming (like macOS), install `ani-cli` and `mpv` using Scoop:
-```powershell
-scoop bucket add extras
-scoop install ani-cli mpv
-```
-Once installed, `ani-tui` will automatically use `ani-cli` to play episodes.
+**Common Issues:**
+- **"fzf not found"** → Run: `scoop install fzf`
+- **"ani-cli not found"** → Run: `scoop bucket add extras; scoop install ani-cli mpv`
+- **No image previews** → Run: `scoop install chafa`
+- **Script won't run** → Run: `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force`
 
 ---
 
@@ -121,39 +157,40 @@ ani-tui
 
 ## Dependencies
 
-### Required
+### macOS
+
 | Package | Purpose | Install |
 |---------|---------|---------|
 | curl | API requests | `brew install curl` |
 | jq | JSON parsing | `brew install jq` |
 | fzf | Fuzzy finder UI | `brew install fzf` |
-
-### Recommended
-| Package | Purpose | Install |
-|---------|---------|---------|
 | chafa | Image previews | `brew install chafa` |
 | mpv | Video playback | `brew install mpv` |
-| iina | Video playback (alternative) | `brew install --cask iina` |
 
-**Install all at once:**
+**Install all:**
 ```bash
 brew install curl jq fzf chafa mpv
 ```
+
+### Windows
+
+See [Windows Dependencies](#windows-dependencies) above.
 
 ---
 
 ## Data Locations
 
-| Type | Path |
-|------|------|
-| Cache | `~/.cache/ani-tui/` |
-| Images | `~/.cache/ani-tui/images/` |
-| History | `~/.local/share/ani-tui/history.json` |
+| Type | macOS | Windows |
+|------|-------|---------|
+| Cache | `~/.cache/ani-tui/` | `%USERPROFILE%\.ani-tui\cache\` |
+| Images | `~/.cache/ani-tui/images/` | `%USERPROFILE%\.ani-tui\cache\images\` |
+| History | `~/.local/share/ani-tui/history.json` | `%USERPROFILE%\.ani-tui\history.json` |
 
 ---
 
 ## Uninstall
 
+### macOS
 ```bash
 # Homebrew
 brew uninstall ani-tui
@@ -163,6 +200,16 @@ brew untap silent9669/tap
 rm -rf ~/.local/share/ani-tui
 rm -rf ~/.cache/ani-tui
 rm /usr/local/bin/ani-tui
+```
+
+### Windows
+```powershell
+# Remove ani-tui
+Remove-Item "$env:USERPROFILE\.ani-tui" -Recurse -Force
+
+# Optional: Remove from PATH manually in System Settings
+# Optional: Uninstall deps
+scoop uninstall ani-cli mpv chafa fzf
 ```
 
 ---
