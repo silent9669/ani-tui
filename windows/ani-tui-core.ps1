@@ -18,7 +18,7 @@ $ErrorActionPreference = "SilentlyContinue"
 # =============================================================================
 # CONFIG
 # =============================================================================
-$script:VERSION = "6.4.0"
+$script:VERSION = "6.5.0"
 $script:DATA = "$env:USERPROFILE\.ani-tui"
 $script:CACHE = "$script:DATA\cache"
 $script:IMAGES = "$script:CACHE\images"

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    ani-tui Windows Installer v6.0
+    ani-tui Windows Installer v6.5
 .DESCRIPTION
     Installs ani-tui and all dependencies for Windows.
 #>
@@ -17,7 +17,7 @@ function Write-Err { Write-Host "  ERROR: $args" -ForegroundColor Red }
 
 Write-Host ""
 Write-Host "  ================================" -ForegroundColor Magenta
-Write-Host "     ani-tui Installer v6.4" -ForegroundColor White
+Write-Host "     ani-tui Installer v6.5" -ForegroundColor White
 Write-Host "  ================================" -ForegroundColor Magenta
 Write-Host ""
 
@@ -43,7 +43,7 @@ try {
 Write-Step "Creating launcher"
 $launcher = @"
 @echo off
-REM ani-tui v6.0 for Windows - Launcher
+REM ani-tui v6.5 for Windows - Launcher
 powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0ani-tui-core.ps1" %*
 "@
 $launcher | Out-File "$BinDir\ani-tui.cmd" -Encoding ASCII
@@ -90,11 +90,24 @@ if (Get-Command scoop -ErrorAction SilentlyContinue) {
         scoop install fzf
     } else { Write-OK "fzf ready" }
     
-    # Optional: chafa (image preview)
-    if (!(Get-Command chafa -ErrorAction SilentlyContinue)) {
-        Write-Host "  Installing chafa..." -ForegroundColor Yellow
-        scoop install chafa
-    } else { Write-OK "chafa ready" }
+    # Optional: viu (image preview) - download from GitHub releases
+    if (!(Get-Command viu -ErrorAction SilentlyContinue)) {
+        Write-Host "  Installing viu (image preview)..." -ForegroundColor Yellow
+        try {
+            $viuDir = "$InstallDir\viu"
+            if (!(Test-Path $viuDir)) { mkdir $viuDir -Force | Out-Null }
+            $viuUrl = "https://github.com/atanunq/viu/releases/latest/download/viu-x86_64-pc-windows-msvc.zip"
+            $viuZip = "$viuDir\viu.zip"
+            Invoke-WebRequest $viuUrl -OutFile $viuZip -UseBasicParsing
+            Expand-Archive $viuZip -DestinationPath $viuDir -Force
+            Copy-Item "$viuDir\viu.exe" "$BinDir\viu.exe" -Force
+            Remove-Item $viuZip -Force
+            Write-OK "viu installed"
+        } catch {
+            Write-Host "  Could not install viu automatically" -ForegroundColor DarkGray
+            Write-Host "  Download manually: https://github.com/atanunq/viu/releases" -ForegroundColor DarkGray
+        }
+    } else { Write-OK "viu ready" }
     
     # Optional: ani-cli + mpv (streaming)
     if (!(Get-Command ani-cli -ErrorAction SilentlyContinue)) {
@@ -119,7 +132,7 @@ Write-Host "  2. Run: ani-tui" -ForegroundColor Yellow
 Write-Host ""
 Write-Host "  Dependencies:" -ForegroundColor Cyan
 Write-Host "    fzf     - $(if(Get-Command fzf -ErrorAction SilentlyContinue){'Installed'}else{'MISSING: scoop install fzf'})"
-Write-Host "    chafa   - $(if(Get-Command chafa -ErrorAction SilentlyContinue){'Installed'}else{'Optional: scoop install chafa'})"
+Write-Host "    viu     - $(if(Get-Command viu -ErrorAction SilentlyContinue){'Installed'}else{'Optional: Download from github.com/atanunq/viu/releases'})"
 Write-Host "    ani-cli - $(if(Get-Command ani-cli -ErrorAction SilentlyContinue){'Installed'}else{'Optional: scoop install ani-cli'})"
 Write-Host "    mpv     - $(if(Get-Command mpv -ErrorAction SilentlyContinue){'Installed'}else{'Optional: scoop install mpv'})"
 Write-Host ""

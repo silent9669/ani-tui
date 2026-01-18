@@ -9,7 +9,7 @@
 ## Features
 
 - 🔍 **Real-time search** - Type to search anime instantly
-- 🖼️ **Image previews** - Anime covers in your terminal (via viu or chafa)
+- 🖼️ **Image previews** - Anime covers in your terminal (via viu)
 - ▶️ **Stream directly** - Play in mpv without leaving terminal
 - 📺 **Watch history** - Track progress across anime
 - ⌨️ **Keyboard-driven** - Navigate with keyboard shortcuts
@@ -47,36 +47,13 @@ Open **PowerShell** and run:
 iex (irm https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/install-windows.ps1)
 ```
 
-This installs everything automatically! 🎉
-
-### What Gets Installed
-
-| Component | Purpose |
-|-----------|---------|
-| ani-tui | The TUI application |
-| Scoop | Package manager (if needed) |
-| Git | Required for streaming |
-| fzf | Fuzzy finder UI |
-| ani-cli + mpv | Video streaming |
-
-### Image Preview Setup
-
-After install, choose ONE image viewer:
-
-**Option A: viu (Recommended for Windows)**
-```powershell
-# Download from GitHub releases
-# https://github.com/atanunq/viu/releases
-# Get viu-x86_64-pc-windows-msvc.zip, extract, add to PATH
-
-# Or with Cargo (if Rust installed):
-cargo install viu
-```
-
-**Option B: chafa**
-```powershell
-scoop install chafa
-```
+This installs everything automatically including:
+- ✅ ani-tui scripts
+- ✅ Scoop package manager
+- ✅ fzf (UI)
+- ✅ viu (image preview)
+- ✅ ani-cli + mpv (streaming)
+- ✅ Git (required by ani-cli)
 
 ### Update
 
@@ -87,25 +64,30 @@ iex (irm https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/ins
 ### Manual Install
 
 ```powershell
-# 1. Install Scoop (if needed)
+# 1. Install Scoop
 irm get.scoop.sh | iex
 
 # 2. Install dependencies
 scoop bucket add extras
 scoop install git fzf ani-cli mpv
 
-# 3. Download ani-tui
+# 3. Install viu (image preview)
+$viuUrl = "https://github.com/atanunq/viu/releases/latest/download/viu-x86_64-pc-windows-msvc.zip"
+Invoke-WebRequest $viuUrl -OutFile "$env:TEMP\viu.zip"
+Expand-Archive "$env:TEMP\viu.zip" -DestinationPath "$env:USERPROFILE\.ani-tui\bin" -Force
+
+# 4. Download ani-tui
 mkdir "$env:USERPROFILE\.ani-tui\bin" -Force
 @("ani-tui-core.ps1", "ani-tui.ps1") | % {
     irm "https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/$_" -OutFile "$env:USERPROFILE\.ani-tui\bin\$_"
 }
 
-# 4. Create launcher & add to PATH
+# 5. Create launcher & add to PATH
 "@echo off`npowershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File `"%~dp0ani-tui-core.ps1`" %*" | Out-File "$env:USERPROFILE\.ani-tui\bin\ani-tui.cmd" -Encoding ASCII
 $p = [Environment]::GetEnvironmentVariable("PATH","User")
 if ($p -notlike "*\.ani-tui\bin*") { [Environment]::SetEnvironmentVariable("PATH","$p;$env:USERPROFILE\.ani-tui\bin","User") }
 
-# 5. Restart terminal, then run:
+# 6. Restart terminal, then run:
 ani-tui
 ```
 
@@ -115,11 +97,11 @@ ani-tui
 <summary><b>Image preview not working</b></summary>
 
 ```powershell
-# Clear cache
+# Clear cache and restart
 Remove-Item "$env:USERPROFILE\.ani-tui\cache" -Recurse -Force
 
-# Try viu instead of chafa (better Windows support)
-# Download from: https://github.com/atanunq/viu/releases
+# Verify viu is installed
+viu --version
 ```
 </details>
 
@@ -130,7 +112,7 @@ Remove-Item "$env:USERPROFILE\.ani-tui\cache" -Recurse -Force
 # ani-cli requires Git Bash
 scoop install git
 
-# Verify it exists
+# Verify
 Test-Path "$env:ProgramFiles\Git\bin\bash.exe"
 ```
 </details>
