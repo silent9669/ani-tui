@@ -36,37 +36,55 @@ chmod +x "$ANI_CLI" 2>/dev/null
 create_preview() {
     cat > "${CACHE}/preview.sh" << 'PREVIEW_SCRIPT'
 #!/usr/bin/env bash
-input="$1"
+input="$@"
 [[ -z "$input" ]] && exit 0
-
-# Extract anime name (remove ID prefix and episode count suffix)
-name=$(echo "$input" | sed 's/^[A-Za-z0-9]*[[:space:]]*//' | sed 's/ ([0-9]* episodes).*//' | head -c 100)
-[[ -z "$name" ]] && exit 0
 
 CACHE="${HOME}/.cache/ani-tui/images"
 mkdir -p "$CACHE"
 
-# Fetch cover from AniList
+# Extract title
+name="$input"
+
+# Remove HIST prefix and [number] like "HIST	[10] Title" or "[10] Title"
+name=$(echo "$name" | sed -E 's/^HIST[[:space:]]*//')
+name=$(echo "$name" | sed -E 's/^\[[0-9]+\][[:space:]]*//')
+
+# Remove "X eps" or "X episodes" anywhere
+name=$(echo "$name" | sed -E 's/[[:space:]]+[0-9]+ eps($|[[:space:]])/ /g')
+name=$(echo "$name" | sed -E 's/ \([0-9]+ episodes\)$//')
+
+# Remove status suffix like "[RELEASING]" or "[FINISHED]"
+name=$(echo "$name" | sed -E 's/[[:space:]]*\[[A-Z]+\][[:space:]]*$//')
+
+# Remove trailing " - " if present
+name=$(echo "$name" | sed 's/[[:space:]]*-[[:space:]]*$//')
+
+# Trim whitespace
+name=$(echo "$name" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+[[ -z "$name" ]] && exit 0
+
+# Fetch from AniList
 result=$(curl -s -X POST "https://graphql.anilist.co" \
     -H "Content-Type: application/json" \
-    -d "{\"query\":\"query{Page(perPage:1){media(search:\\\"$(echo "$name" | sed 's/"/\\"/g')\\\",type:ANIME){coverImage{extraLarge large}}}}\"}") 2>/dev/null
+    -d "{\"query\":\"query{Page(perPage:1){media(search:\\\"$(echo "$name" | sed 's/"/\\"/g')\\\",type:ANIME){coverImage{extraLarge large}}}}\"}" 2>/dev/null)
 
 cover=$(echo "$result" | jq -r '.data.Page.media[0].coverImage.extraLarge // .data.Page.media[0].coverImage.large // empty' 2>/dev/null)
 
-if [[ -n "$cover" ]] && command -v chafa &>/dev/null; then
-    hash=$(echo "$name" | md5 2>/dev/null | cut -c1-10 || echo "$name" | shasum | cut -c1-10)
-    img="${CACHE}/${hash}.jpg"
+if [[ -n "$cover" && "$cover" != "null" ]]; then
+    hash=$(echo "$name" | md5 2>/dev/null || echo "$name" | md5sum 2>/dev/null | cut -d' ' -f1)
+    img="${CACHE}/${hash:0:12}.jpg"
     
     [[ ! -f "$img" ]] && curl -sL "$cover" -o "$img" 2>/dev/null
     
-    if [[ -f "$img" ]]; then
-        # Large centered image - fills preview pane
-        echo ""
-        chafa --size=60x40 --symbols=all --colors=256 --color-space=din99d --dither=diffusion "$img" 2>/dev/null
+    if [[ -f "$img" ]] && command -v chafa &>/dev/null; then
+        # Large centered image
+        printf "\n\n\n"
+        chafa --center=on --size=70x45 --symbols=all --colors=256 "$img" 2>/dev/null
+    else
+        printf "\n\n  %s\n\n  (Install: brew install chafa)\n" "$name"
     fi
 else
-    echo ""
-    echo "  Loading preview..."
+    printf "\n\n  %s\n\n  Loading...\n" "$name"
 fi
 PREVIEW_SCRIPT
     chmod +x "${CACHE}/preview.sh"
@@ -120,14 +138,16 @@ run_tui() {
             --border=rounded \
             --margin=0 \
             --padding=1 \
-            --header=$'🎬 ani-tui │ Type to search │ ↑↓ Navigate │ Enter Select │ Esc Quit' \
+            --delimiter=$'\t' \
+            --with-nth=2 \
+            --header=$'🎬 ani-tui │ Type to search │ ↑↓ Navigate │ Enter Select │ Ctrl-D Delete │ Esc Quit' \
             --header-first \
             --prompt="Search: " \
             --pointer="▶" \
-            --preview="${CACHE}/preview.sh {2..}" \
-            --preview-window="right:55%:border-rounded" \
-            --bind="change:reload:sleep 0.1; $0 --search {q} 2>/dev/null || echo ''" \
-            --bind="ctrl-r:reload:$0 --search {q} 2>/dev/null || echo ''" \
+            --preview="${CACHE}/preview.sh {2}" \
+            --preview-window="right:50%:border-rounded" \
+            --bind="change:reload:[[ -z {q} ]] && jq -r '.[]? | \"HIST\t[\(.last_episode)] \(.title)\"' '$HISTORY' 2>/dev/null || $0 --search {q} 2>/dev/null" \
+            --bind="ctrl-d:execute-silent(title=\$(echo {2} | sed -E 's/^\[[0-9]+\] //'); jq --arg t \"\$title\" 'map(select(.title != \$t))' '$HISTORY' > /tmp/h.tmp && mv /tmp/h.tmp '$HISTORY')+reload(jq -r '.[]? | \"HIST\t[\(.last_episode)] \(.title)\"' '$HISTORY' 2>/dev/null)" \
             --color="fg:#cdd6f4,bg:#1e1e2e,hl:#f9e2af,fg+:#cdd6f4,bg+:#313244,hl+:#f9e2af" \
             --color="info:#94e2d5,prompt:#f5c2e7,pointer:#f5e0dc,marker:#a6e3a1,spinner:#f5e0dc,header:#89b4fa,border:#6c7086")
         
@@ -209,7 +229,7 @@ run_tui() {
         clear
         echo -e "\033[1;32m▶ Now Playing: $title - Episode $episode\033[0m"
         echo ""
-        "$ANI_CLI" -e "$episode" "$title"
+        "$ANI_CLI" -S 1 -e "$episode" "$title"
     done
 }
 
