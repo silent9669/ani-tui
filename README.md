@@ -48,17 +48,24 @@ ln -sf ~/.local/share/ani-tui/macos/ani-tui /usr/local/bin/ani-tui
 ani-tui
 ```
 
-### Windows (PowerShell)
+### Windows
 
-**Option 1: Git clone**
+**Option 1: PowerShell (Recommended)**
+Open PowerShell and run:
 ```powershell
-git clone https://github.com/silent9669/ani-tui.git $env:USERPROFILE\.ani-tui
+git clone https://github.com/silent9669/ani-tui.git "$env:USERPROFILE\.ani-tui"
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.ani-tui\windows\ani-tui.ps1"
 ```
 
-**Option 2: One-liner download**
+**Option 2: Command Prompt (cmd)**
+```cmd
+git clone https://github.com/silent9669/ani-tui.git "%USERPROFILE%\.ani-tui"
+powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\.ani-tui\windows\ani-tui.ps1"
+```
+
+**Option 3: One-liner (PowerShell)**
 ```powershell
-mkdir $env:USERPROFILE\.ani-tui -Force; Invoke-WebRequest -Uri "https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/ani-tui.ps1" -OutFile "$env:USERPROFILE\.ani-tui\ani-tui.ps1"; powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.ani-tui\ani-tui.ps1"
+mkdir "$env:USERPROFILE\.ani-tui" -Force; Invoke-WebRequest -Uri "https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/ani-tui.ps1" -OutFile "$env:USERPROFILE\.ani-tui\ani-tui.ps1"; powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.ani-tui\ani-tui.ps1"
 ```
 
 ---
