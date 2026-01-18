@@ -19,7 +19,7 @@ $ErrorActionPreference = "SilentlyContinue"
 # =============================================================================
 # CONFIG
 # =============================================================================
-$script:VERSION = "6.2.0"
+$script:VERSION = "6.3.0"
 $script:DATA = "$env:USERPROFILE\.ani-tui"
 $script:CACHE = "$script:DATA\cache"
 $script:IMAGES = "$script:CACHE\images"
@@ -187,12 +187,13 @@ $hash = [System.BitConverter]::ToString(
 ).Replace("-", "").Substring(0, 12).ToLower()
 $imgPath = "$IMAGES\$hash.jpg"
 
-# Fetch image if not cached
+# Fetch image if not cached (use extraLarge for better quality)
 if (!(Test-Path $imgPath)) {
     try {
-        $query = @{ query = "query{Page(perPage:1){media(search:`"$name`",type:ANIME){coverImage{large}}}}" } | ConvertTo-Json
+        $query = @{ query = "query{Page(perPage:1){media(search:`"$name`",type:ANIME){coverImage{extraLarge large}}}}" } | ConvertTo-Json
         $r = Invoke-RestMethod "https://graphql.anilist.co" -Method Post -ContentType "application/json" -Body $query -TimeoutSec 8
-        $coverUrl = $r.data.Page.media[0].coverImage.large
+        $coverUrl = $r.data.Page.media[0].coverImage.extraLarge
+        if (!$coverUrl) { $coverUrl = $r.data.Page.media[0].coverImage.large }
         if ($coverUrl) {
             Invoke-WebRequest $coverUrl -OutFile $imgPath -TimeoutSec 10
         }
@@ -202,9 +203,9 @@ if (!(Test-Path $imgPath)) {
     }
 }
 
-# Display image
+# Display image with high quality settings
 if (Test-Path $imgPath) {
-    & chafa --size=45x25 $imgPath 2>$null
+    & chafa --size=60x35 --symbols=all --colors=256 $imgPath 2>$null
 }
 '@
     $previewScript | Out-File "$script:SCRIPTS\preview.ps1" -Encoding UTF8
@@ -442,13 +443,13 @@ function Start-TUI {
         
         $aniCli = Get-Command ani-cli -ErrorAction SilentlyContinue
         if ($aniCli) {
-            # Use Start-Process to run ani-cli properly
-            $argList = @("-S", "1", "-e", "$episode", "`"$title`"")
             Write-Host "  Running: ani-cli -S 1 -e $episode `"$title`"" -ForegroundColor DarkGray
             Write-Host ""
             
-            # Run ani-cli and wait for it to complete
-            & ani-cli -S 1 -e $episode $title
+            # Use cmd.exe /c to run ani-cli to avoid WSL issues
+            # This ensures it runs in native Windows mode
+            $cmdArgs = "ani-cli -S 1 -e $episode `"$title`""
+            Start-Process -FilePath "cmd.exe" -ArgumentList "/c", $cmdArgs -Wait -NoNewWindow
             
             Write-Host ""
             Write-Host "  Playback ended." -ForegroundColor Cyan
