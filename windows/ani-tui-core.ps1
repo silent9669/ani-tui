@@ -143,105 +143,59 @@ powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0delete.ps1" %*
     $deleteCmd | Out-File "$script:SCRIPTS\delete.cmd" -Encoding ASCII
 
     # ==========================================================================
-    # PREVIEW HELPER - Pure Batch Script (no PowerShell for image display)
+    # PREVIEW HELPER - Simplified PowerShell for reliability
     # ==========================================================================
-    # Using batch script similar to macOS bash version for better compatibility
-    $previewCmd = @'
-@echo off
-setlocal enabledelayedexpansion
+    $previewScript = @'
+param([Parameter(ValueFromRemainingArguments)][string[]]$Args)
+$ErrorActionPreference = "SilentlyContinue"
 
-set "input=%*"
-if "%input%"=="" exit /b
+$input = ($Args -join " ").Trim()
+if (!$input) { exit }
 
-set "CACHE=%USERPROFILE%\.ani-tui\cache"
-set "IMAGES=%CACHE%\images"
-if not exist "%IMAGES%" mkdir "%IMAGES%" 2>nul
+$CACHE = "$env:USERPROFILE\.ani-tui\cache\images"
+if (!(Test-Path $CACHE)) { mkdir $CACHE -Force | Out-Null }
 
-:: Clean title - remove prefixes
-set "name=%input%"
+# Clean title
+$name = $input -replace '^HIST\s*','' -replace '^\[\d+\]\s*','' -replace '\s*\(\d+\s+eps\)$','' -replace '\s*\[[A-Z]+\]$',''
+$name = $name.Trim()
+if (!$name) { exit }
 
-:: Remove HIST prefix
-set "name=!name:HIST=!"
+# Hash for cache
+$hash = [BitConverter]::ToString([Security.Cryptography.MD5]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($name))).Replace("-","").Substring(0,12).ToLower()
+$img = "$CACHE\$hash.jpg"
 
-:: Remove leading [ and everything to ] (episode number)
-for /f "tokens=1,* delims=]" %%a in ("!name!") do (
-    set "temp=%%b"
-    if defined temp set "name=!temp!"
-)
+# Check chafa
+$chafa = Get-Command chafa -ErrorAction SilentlyContinue
+if (!$chafa) {
+    Write-Host "`n  $name`n  ────────────────────────────`n  [scoop install chafa]`n"
+    exit
+}
 
-:: Remove (xx eps) suffix - simple approach
-for /f "tokens=1 delims=(" %%a in ("!name!") do set "name=%%a"
+# Fetch image
+if (!(Test-Path $img)) {
+    try {
+        $q = '{"query":"query{Page(perPage:1){media(search:\"' + $name.Replace('"','\"') + '\",type:ANIME){coverImage{extraLarge large}}}}"}'
+        $r = Invoke-RestMethod "https://graphql.anilist.co" -Method Post -ContentType "application/json" -Body $q -TimeoutSec 5
+        $url = $r.data.Page.media[0].coverImage.extraLarge
+        if (!$url) { $url = $r.data.Page.media[0].coverImage.large }
+        if ($url) { Invoke-WebRequest $url -OutFile $img -TimeoutSec 8 | Out-Null }
+    } catch { }
+}
 
-:: Trim whitespace
-for /f "tokens=* delims= " %%a in ("!name!") do set "name=%%a"
-
-if "!name!"=="" exit /b
-
-:: Generate simple hash using certutil
-echo !name!> "%TEMP%\ani_hash_input.txt"
-for /f "skip=1 tokens=*" %%h in ('certutil -hashfile "%TEMP%\ani_hash_input.txt" MD5 2^>nul') do (
-    set "hash=%%h"
-    goto :got_hash
-)
-:got_hash
-set "hash=!hash: =!"
-set "hash=!hash:~0,12!"
-del "%TEMP%\ani_hash_input.txt" 2>nul
-
-set "imgfile=%IMAGES%\!hash!.jpg"
-
-:: Check for chafa
-where chafa >nul 2>&1
-if errorlevel 1 (
-    echo.
-    echo   !name!
-    echo   ────────────────────────────────
-    echo   [Install chafa: scoop install chafa]
-    exit /b
-)
-
-:: Fetch image if not cached
-if not exist "!imgfile!" (
-    :: Build GraphQL query
-    set "query={\"query\":\"query{Page(perPage:1){media(search:\\\"!name!\\\",type:ANIME){coverImage{extraLarge large}}}}\"}"
-    
-    :: Use curl.exe to fetch cover URL
-    for /f "tokens=*" %%u in ('curl.exe -s -X POST "https://graphql.anilist.co" -H "Content-Type: application/json" -d "!query!" 2^>nul ^| findstr /i "extraLarge"') do (
-        set "response=%%u"
-    )
-    
-    :: Extract URL from response (simple extraction)
-    if defined response (
-        for /f "tokens=2 delims=:" %%a in ("!response!") do (
-            set "url=%%a"
-            set "url=!url:~1!"
-            set "url=!url:\"=!"
-            set "url=!url:,=!"
-            set "url=!url:}=!"
-            set "url=https:!url!"
-        )
-        
-        if defined url (
-            curl.exe -sL "!url!" -o "!imgfile!" 2>nul
-        )
-    )
-)
-
-:: Display image with chafa
-echo.
-if exist "!imgfile!" (
-    chafa --size=60x35 --symbols=all --colors=256 "!imgfile!" 2>nul
-    echo.
-    echo   !name!
-) else (
-    echo   !name!
-    echo   ────────────────────────────────
-    echo   Loading...
-)
-echo.
-
-endlocal
+# Display
+Write-Host ""
+if (Test-Path $img) {
+    & chafa --size=60x35 --symbols=all --colors=256 $img 2>$null
+    Write-Host "`n  $name"
+} else {
+    Write-Host "  $name`n  ────────────────────────────`n  Loading..."
+}
+Write-Host ""
 '@
+    $previewScript | Out-File "$script:SCRIPTS\preview.ps1" -Encoding UTF8
+    
+    # Simple batch wrapper
+    $previewCmd = "@echo off`r`npowershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File `"%~dp0preview.ps1`" %*"
     $previewCmd | Out-File "$script:SCRIPTS\preview.cmd" -Encoding ASCII
 }
 
