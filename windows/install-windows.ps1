@@ -90,46 +90,50 @@ if (Get-Command scoop -ErrorAction SilentlyContinue) {
         scoop install fzf
     } else { Write-OK "fzf ready" }
     
-    # Optional: viu (image preview) - download from GitHub releases
+    # Optional: viu (image preview) - download using curl.exe
     if (!(Get-Command viu -ErrorAction SilentlyContinue)) {
         Write-Host "  Installing viu (image preview)..." -ForegroundColor Yellow
         try {
-            # Ensure TLS 1.2 for GitHub
-            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-            
             $viuDir = "$InstallDir\viu"
             if (!(Test-Path $viuDir)) { mkdir $viuDir -Force | Out-Null }
             $viuZip = "$viuDir\viu.zip"
             
-            # Get latest release URL from GitHub API
-            $releaseApi = "https://api.github.com/repos/atanunq/viu/releases/latest"
-            $headers = @{ "User-Agent" = "ani-tui-installer" }
-            $release = Invoke-RestMethod $releaseApi -Headers $headers -TimeoutSec 10
-            $viuUrl = ($release.assets | Where-Object { $_.name -like "*windows*msvc*.zip" } | Select-Object -First 1).browser_download_url
+            # Use curl.exe (built into Windows 10+) - handles redirects better
+            $viuUrl = "https://github.com/atanunq/viu/releases/download/v1.5.1/viu-x86_64-pc-windows-msvc.zip"
             
-            if ($viuUrl) {
-                # Try Invoke-WebRequest first
-                Invoke-WebRequest $viuUrl -OutFile $viuZip -UseBasicParsing -Headers $headers
+            # Download with curl.exe
+            $curlResult = & curl.exe -L -s -o $viuZip $viuUrl 2>&1
+            
+            if (Test-Path $viuZip) {
+                # Extract
                 Expand-Archive $viuZip -DestinationPath $viuDir -Force
                 
-                # Find and copy viu.exe
-                $viuExe = Get-ChildItem $viuDir -Filter "viu.exe" -Recurse | Select-Object -First 1
+                # Find viu.exe (might be in subfolder)
+                $viuExe = Get-ChildItem $viuDir -Filter "viu.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
                 if ($viuExe) {
                     Copy-Item $viuExe.FullName "$BinDir\viu.exe" -Force
                     Write-OK "viu installed"
                 } else {
-                    throw "viu.exe not found in archive"
+                    # Maybe viu.exe is directly in zip
+                    if (Test-Path "$viuDir\viu.exe") {
+                        Copy-Item "$viuDir\viu.exe" "$BinDir\viu.exe" -Force
+                        Write-OK "viu installed"
+                    } else {
+                        throw "viu.exe not found in archive"
+                    }
                 }
                 Remove-Item $viuZip -Force -ErrorAction SilentlyContinue
             } else {
-                throw "Could not find viu download URL"
+                throw "Download failed"
             }
         } catch {
-            Write-Host "  Could not install viu automatically: $_" -ForegroundColor DarkGray
-            Write-Host "  Please download manually:" -ForegroundColor Yellow
-            Write-Host "    1. Go to: https://github.com/atanunq/viu/releases" -ForegroundColor Yellow
-            Write-Host "    2. Download: viu-x86_64-pc-windows-msvc.zip" -ForegroundColor Yellow
-            Write-Host "    3. Extract viu.exe to: $BinDir" -ForegroundColor Yellow
+            Write-Host "  Could not install viu automatically" -ForegroundColor DarkGray
+            Write-Host ""
+            Write-Host "  Please install viu manually:" -ForegroundColor Yellow
+            Write-Host "    1. Download: https://github.com/atanunq/viu/releases/download/v1.5.1/viu-x86_64-pc-windows-msvc.zip" -ForegroundColor Cyan
+            Write-Host "    2. Extract viu.exe" -ForegroundColor Cyan
+            Write-Host "    3. Copy to: $BinDir\viu.exe" -ForegroundColor Cyan
+            Write-Host ""
         }
     } else { Write-OK "viu ready" }
     
