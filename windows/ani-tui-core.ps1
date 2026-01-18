@@ -143,20 +143,20 @@ powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0delete.ps1" %*
     $deleteCmd | Out-File "$script:SCRIPTS\delete.cmd" -Encoding ASCII
 
     # ==========================================================================
-    # PREVIEW HELPER - Simplified PowerShell for reliability
+    # PREVIEW HELPER - Multiple image viewer support (viu > chafa > text)
     # ==========================================================================
     $previewScript = @'
-param([Parameter(ValueFromRemainingArguments)][string[]]$Args)
+param([Parameter(ValueFromRemainingArguments)][string[]]$InputArgs)
 $ErrorActionPreference = "SilentlyContinue"
 
-$input = ($Args -join " ").Trim()
-if (!$input) { exit }
+$inputText = ($InputArgs -join " ").Trim()
+if (!$inputText) { exit }
 
 $CACHE = "$env:USERPROFILE\.ani-tui\cache\images"
 if (!(Test-Path $CACHE)) { mkdir $CACHE -Force | Out-Null }
 
 # Clean title
-$name = $input -replace '^HIST\s*','' -replace '^\[\d+\]\s*','' -replace '\s*\(\d+\s+eps\)$','' -replace '\s*\[[A-Z]+\]$',''
+$name = $inputText -replace '^HIST\s*','' -replace '^\[\d+\]\s*','' -replace '\s*\(\d+\s+eps\)$','' -replace '\s*\[[A-Z]+\]$',''
 $name = $name.Trim()
 if (!$name) { exit }
 
@@ -164,15 +164,13 @@ if (!$name) { exit }
 $hash = [BitConverter]::ToString([Security.Cryptography.MD5]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($name))).Replace("-","").Substring(0,12).ToLower()
 $img = "$CACHE\$hash.jpg"
 
-# Check chafa
+# Check for image viewers (prefer viu > chafa)
+$viu = Get-Command viu -ErrorAction SilentlyContinue
 $chafa = Get-Command chafa -ErrorAction SilentlyContinue
-if (!$chafa) {
-    Write-Host "`n  $name`n  ────────────────────────────`n  [scoop install chafa]`n"
-    exit
-}
+$viewer = if ($viu) { "viu" } elseif ($chafa) { "chafa" } else { $null }
 
-# Fetch image
-if (!(Test-Path $img)) {
+# Fetch image if we have a viewer
+if ($viewer -and !(Test-Path $img)) {
     try {
         $q = '{"query":"query{Page(perPage:1){media(search:\"' + $name.Replace('"','\"') + '\",type:ANIME){coverImage{extraLarge large}}}}"}'
         $r = Invoke-RestMethod "https://graphql.anilist.co" -Method Post -ContentType "application/json" -Body $q -TimeoutSec 5
@@ -184,11 +182,33 @@ if (!(Test-Path $img)) {
 
 # Display
 Write-Host ""
-if (Test-Path $img) {
-    & chafa --size=60x35 --symbols=all --colors=256 $img 2>$null
-    Write-Host "`n  $name"
+
+if ($viewer -and (Test-Path $img)) {
+    switch ($viewer) {
+        "viu" {
+            # viu: --width for size, uses Unicode half-blocks with truecolor
+            & viu -w 60 $img 2>$null
+        }
+        "chafa" {
+            # chafa: standard settings
+            & chafa --size=60x35 --symbols=all --colors=256 $img 2>$null
+        }
+    }
+    Write-Host ""
+    Write-Host "  $name" -ForegroundColor Cyan
 } else {
-    Write-Host "  $name`n  ────────────────────────────`n  Loading..."
+    # Text-only fallback with anime info
+    Write-Host "  $name" -ForegroundColor Cyan
+    Write-Host "  ────────────────────────────────────" -ForegroundColor DarkGray
+    
+    if (!$viewer) {
+        Write-Host ""
+        Write-Host "  [Image preview: install viu or chafa]" -ForegroundColor DarkGray
+        Write-Host "    cargo install viu" -ForegroundColor DarkGray
+        Write-Host "    scoop install chafa" -ForegroundColor DarkGray
+    } else {
+        Write-Host "  Loading..." -ForegroundColor DarkGray
+    }
 }
 Write-Host ""
 '@

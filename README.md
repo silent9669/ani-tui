@@ -3,13 +3,13 @@
 🎬 **Anime TUI** with image previews and terminal streaming.
 
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-brightgreen)
-![Version](https://img.shields.io/badge/version-6.4-blue)
+![Version](https://img.shields.io/badge/version-6.5-blue)
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
 
 ## Features
 
 - 🔍 **Real-time search** - Type to search anime instantly
-- 🖼️ **Image previews** - High-quality anime covers in your terminal (via chafa)
+- 🖼️ **Image previews** - Anime covers in your terminal (via viu or chafa)
 - ▶️ **Stream directly** - Play in mpv without leaving terminal
 - 📺 **Watch history** - Track progress across anime
 - ⌨️ **Keyboard-driven** - Navigate with keyboard shortcuts
@@ -39,9 +39,7 @@ ln -sf ~/.local/share/ani-tui/macos/ani-tui /usr/local/bin/ani-tui
 
 ## Windows Installation
 
-> **Requires:** Windows 10+ with [Scoop](https://scoop.sh) and [Git for Windows](https://git-scm.com/download/win)
-
-### Quick Install (Recommended)
+### Quick Install (One Command)
 
 Open **PowerShell** and run:
 
@@ -49,20 +47,52 @@ Open **PowerShell** and run:
 iex (irm https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/install-windows.ps1)
 ```
 
-This automatically installs:
-- ani-tui scripts
-- Scoop package manager (if needed)
-- All dependencies (fzf, chafa, ani-cli, mpv, git)
+This installs everything automatically! 🎉
+
+### What Gets Installed
+
+| Component | Purpose |
+|-----------|---------|
+| ani-tui | The TUI application |
+| Scoop | Package manager (if needed) |
+| Git | Required for streaming |
+| fzf | Fuzzy finder UI |
+| ani-cli + mpv | Video streaming |
+
+### Image Preview Setup
+
+After install, choose ONE image viewer:
+
+**Option A: viu (Recommended for Windows)**
+```powershell
+# Download from GitHub releases
+# https://github.com/atanunq/viu/releases
+# Get viu-x86_64-pc-windows-msvc.zip, extract, add to PATH
+
+# Or with Cargo (if Rust installed):
+cargo install viu
+```
+
+**Option B: chafa**
+```powershell
+scoop install chafa
+```
+
+### Update
+
+```powershell
+iex (irm https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/install-windows.ps1)
+```
 
 ### Manual Install
 
 ```powershell
-# 1. Install Scoop
+# 1. Install Scoop (if needed)
 irm get.scoop.sh | iex
 
-# 2. Install dependencies (git is REQUIRED for streaming)
+# 2. Install dependencies
 scoop bucket add extras
-scoop install git fzf chafa ani-cli mpv
+scoop install git fzf ani-cli mpv
 
 # 3. Download ani-tui
 mkdir "$env:USERPROFILE\.ani-tui\bin" -Force
@@ -79,53 +109,40 @@ if ($p -notlike "*\.ani-tui\bin*") { [Environment]::SetEnvironmentVariable("PATH
 ani-tui
 ```
 
-### Update
-
-```powershell
-# Re-download latest scripts & clear cache
-@("ani-tui-core.ps1", "ani-tui.ps1") | % {
-    irm "https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/$_" -OutFile "$env:USERPROFILE\.ani-tui\bin\$_"
-}
-Remove-Item "$env:USERPROFILE\.ani-tui\cache" -Recurse -Force -ErrorAction SilentlyContinue
-```
-
-### Dependencies
-
-| Package | Purpose | Required |
-|---------|---------|:--------:|
-| **git** | Git Bash (required by ani-cli) | ✅ |
-| **fzf** | Fuzzy finder UI | ✅ |
-| chafa | Image previews | ⭐ Recommended |
-| ani-cli | Video streaming | ⭐ Recommended |
-| mpv | Video player | ⭐ Recommended |
-
-```powershell
-# Install all at once
-scoop bucket add extras && scoop install git fzf chafa ani-cli mpv
-```
-
 ### Troubleshooting
 
-**Image preview not working:**
-```powershell
-# Clear image cache and reinstall chafa
-Remove-Item "$env:USERPROFILE\.ani-tui\cache" -Recurse -Force
-scoop update chafa
-```
+<details>
+<summary><b>Image preview not working</b></summary>
 
-**Streaming not working (WSL error):**
 ```powershell
-# ani-cli requires Git Bash - make sure git is installed
+# Clear cache
+Remove-Item "$env:USERPROFILE\.ani-tui\cache" -Recurse -Force
+
+# Try viu instead of chafa (better Windows support)
+# Download from: https://github.com/atanunq/viu/releases
+```
+</details>
+
+<details>
+<summary><b>Streaming not working (WSL error)</b></summary>
+
+```powershell
+# ani-cli requires Git Bash
 scoop install git
-# Verify Git Bash exists
+
+# Verify it exists
 Test-Path "$env:ProgramFiles\Git\bin\bash.exe"
 ```
+</details>
 
-**Clean reinstall:**
+<details>
+<summary><b>Clean reinstall</b></summary>
+
 ```powershell
 Remove-Item "$env:USERPROFILE\.ani-tui" -Recurse -Force -ErrorAction SilentlyContinue
 iex (irm https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/install-windows.ps1)
 ```
+</details>
 
 ---
 
@@ -139,7 +156,7 @@ ani-tui
 
 | Key | Action |
 |-----|--------|
-| Type | Search anime (real-time) |
+| Type | Search anime |
 | ↑ / ↓ | Navigate |
 | Enter | Select / Play |
 | Ctrl-D | Delete from history |
@@ -148,10 +165,9 @@ ani-tui
 ### Workflow
 
 1. Launch `ani-tui`
-2. Type to search or select from history
-3. Pick an anime → see cover preview
-4. Choose episode
-5. Watch in mpv
+2. Type to search or browse history
+3. Select anime → see preview
+4. Choose episode → watch in mpv
 
 ---
 
@@ -175,7 +191,6 @@ rm -rf ~/.cache/ani-tui ~/.local/share/ani-tui
 ### Windows
 ```powershell
 Remove-Item "$env:USERPROFILE\.ani-tui" -Recurse -Force
-# Optionally remove from PATH in System Settings > Environment Variables
 ```
 
 ---
