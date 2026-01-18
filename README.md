@@ -51,21 +51,25 @@ ani-tui
 ### Windows
 
 **Option 1: PowerShell (Recommended)**
-Open PowerShell and run:
+1. Open **PowerShell** (Search for "PowerShell" in Start Menu)
+2. Run the following commands:
 ```powershell
 git clone https://github.com/silent9669/ani-tui.git "$env:USERPROFILE\.ani-tui"
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.ani-tui\windows\ani-tui.ps1"
+& "$env:USERPROFILE\.ani-tui\windows\ani-tui.ps1"
 ```
 
 **Option 2: Command Prompt (cmd)**
+1. Open **Command Prompt** (cmd.exe)
+2. Run the following commands:
 ```cmd
 git clone https://github.com/silent9669/ani-tui.git "%USERPROFILE%\.ani-tui"
 powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\.ani-tui\windows\ani-tui.ps1"
 ```
 
-**Option 3: One-liner (PowerShell)**
+**Option 3: Simple Install (PowerShell)**
+Paste this entire line into **PowerShell**:
 ```powershell
-mkdir "$env:USERPROFILE\.ani-tui" -Force; Invoke-WebRequest -Uri "https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/ani-tui.ps1" -OutFile "$env:USERPROFILE\.ani-tui\ani-tui.ps1"; powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.ani-tui\ani-tui.ps1"
+mkdir "$env:USERPROFILE\.ani-tui" -Force; Invoke-WebRequest "https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/ani-tui.ps1" -OutFile "$env:USERPROFILE\.ani-tui\ani-tui.ps1"; & "$env:USERPROFILE\.ani-tui\ani-tui.ps1"
 ```
 
 ---
