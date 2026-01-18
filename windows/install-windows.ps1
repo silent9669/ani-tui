@@ -1,148 +1,87 @@
 <#
 .SYNOPSIS
-    Install script for ani-tui on Windows
-
+    Full automated installer for ani-tui on Windows
 .DESCRIPTION
-    Installs ani-tui.ps1 to a user-accessible location and optionally
-    creates a command shim for easy access from any terminal.
-
-.EXAMPLE
-    .\install-windows.ps1
-    Run the installer
+    Installs ani-tui, and optionally installs Scoop + ani-cli + mpv for streaming support.
 #>
-
 [CmdletBinding()]
 param(
-    [string]$InstallDir = "",
-    [switch]$NoShim,
-    [switch]$Help
+    [switch]$NoDeps
 )
 
 $ErrorActionPreference = "Stop"
+$ScriptUrl = "https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/ani-tui.ps1"
 
-function Write-Info {
-    param([string]$Message)
-    Write-Host "[INFO] " -ForegroundColor Blue -NoNewline
-    Write-Host $Message
+function Write-Step { Write-Host "`n==== $args ====" -ForegroundColor Cyan }
+function Write-Ok { Write-Host "  OK: $args" -ForegroundColor Green }
+function Write-Err { Write-Host "  ERR: $args" -ForegroundColor Red }
+
+Write-Step "Starting ani-tui Installation"
+
+# 1. Setup Directories
+$InstallDir = "$env:USERPROFILE\.ani-tui"
+$BinDir = "$InstallDir\bin"
+if (-not (Test-Path $BinDir)) { New-Item -ItemType Directory -Path $BinDir -Force | Out-Null }
+
+# 2. Download Main Script
+Write-Step "Downloading ani-tui..."
+try {
+    Invoke-WebRequest $ScriptUrl -OutFile "$BinDir\ani-tui.ps1"
+    Write-Ok "Downloaded to $BinDir\ani-tui.ps1"
+} catch {
+    Write-Err "Failed to download script. Check internet."; exit 1
 }
 
-function Write-Success {
-    param([string]$Message)
-    Write-Host "[OK] " -ForegroundColor Green -NoNewline
-    Write-Host $Message
+# 3. Create CMD Shim (ani-tui.cmd)
+$Shim = "$BinDir\ani-tui.cmd"
+"@echo off`npowershell -ExecutionPolicy Bypass -NoLogo -File `"%~dp0ani-tui.ps1`" %*" | Out-File -Encoding ASCII $Shim
+Write-Ok "Created shim at $Shim"
+
+# 4. Add to PATH (Persistent)
+$UserPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+if ($UserPath -notlike "*$BinDir*") {
+    Write-Step "Adding to PATH..."
+    [Environment]::SetEnvironmentVariable("PATH", "$UserPath;$BinDir", "User")
+    $env:PATH += ";$BinDir"
+    Write-Ok "Added to User PATH"
+} else {
+    Write-Ok "Already in PATH"
 }
 
-function Write-Warn {
-    param([string]$Message)
-    Write-Host "[WARN] " -ForegroundColor Yellow -NoNewline
-    Write-Host $Message
+# 5. Dependency Check & Install (Scoop -> ani-cli, mpv)
+if (-not $NoDeps) {
+    Write-Step "Checking Dependencies (for streaming)..."
+    
+    # Check Scoop
+    if (-not (Get-Command "scoop" -ErrorAction SilentlyContinue)) {
+        Write-Host "  Scoop not found. Installing Scoop..." -ForegroundColor Yellow
+        try {
+            Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
+            Invoke-RestMethod -Uri https://get.scoop.sh | Invoke-Expression
+            Write-Ok "Scoop installed."
+        } catch {
+            Write-Err "Failed to install Scoop. You may need to run as Admin or check network."
+        }
+    }
+
+    # Install tools via Scoop
+    if (Get-Command "scoop" -ErrorAction SilentlyContinue) {
+        scoop bucket add extras | Out-Null
+        
+        if (-not (Get-Command "ani-cli" -ErrorAction SilentlyContinue)) {
+            Write-Host "  Installing ani-cli (via Scoop)..." -ForegroundColor Yellow
+            scoop install ani-cli
+        } else { Write-Ok "ani-cli detected." }
+
+        if (-not (Get-Command "mpv" -ErrorAction SilentlyContinue)) {
+            Write-Host "  Installing mpv (via Scoop)..." -ForegroundColor Yellow
+            scoop install mpv
+        } else { Write-Ok "mpv detected." }
+    } else {
+        Write-Err "Scoop missing. Cannot install streaming dependencies automatically."
+    }
 }
 
-function Show-Help {
-    @"
-
-ani-tui Windows Installer
-
-USAGE:
-    .\install-windows.ps1 [options]
-
-OPTIONS:
-    -InstallDir <path>    Custom installation directory
-                          Default: $env:USERPROFILE\.ani-tui\bin
-    -NoShim               Don't create ani-tui.cmd shim
-    -Help                 Show this help message
-
-EXAMPLES:
-    .\install-windows.ps1
-    .\install-windows.ps1 -InstallDir "C:\Tools"
-
-"@
-}
-
-function Main {
-    if ($Help) {
-        Show-Help
-        return
-    }
-    
-    Write-Host ""
-    Write-Host "===========================================" -ForegroundColor Cyan
-    Write-Host "       ani-tui Windows Installer           " -ForegroundColor Cyan
-    Write-Host "===========================================" -ForegroundColor Cyan
-    Write-Host ""
-    
-    # Determine install directory
-    if (-not $InstallDir) {
-        $InstallDir = Join-Path $env:USERPROFILE ".ani-tui\bin"
-    }
-    
-    # Get script directory
-    $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-    $SourceScript = Join-Path $ScriptDir "ani-tui.ps1"
-    
-    # Check if source exists
-    if (-not (Test-Path $SourceScript)) {
-        Write-Error "Cannot find ani-tui.ps1 in $ScriptDir"
-        return
-    }
-    
-    # Create install directory
-    Write-Info "Installing to: $InstallDir"
-    
-    if (-not (Test-Path $InstallDir)) {
-        New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-        Write-Success "Created directory: $InstallDir"
-    }
-    
-    # Copy script
-    $DestScript = Join-Path $InstallDir "ani-tui.ps1"
-    Copy-Item -Path $SourceScript -Destination $DestScript -Force
-    Write-Success "Copied ani-tui.ps1"
-    
-    # Create shim
-    if (-not $NoShim) {
-        $ShimPath = Join-Path $InstallDir "ani-tui.cmd"
-        $ShimContent = @"
-@echo off
-powershell -ExecutionPolicy Bypass -NoLogo -File "%~dp0ani-tui.ps1" %*
-"@
-        $ShimContent | Out-File -FilePath $ShimPath -Encoding ASCII
-        Write-Success "Created ani-tui.cmd shim"
-    }
-    
-    # Check if install dir is in PATH
-    $currentPath = [Environment]::GetEnvironmentVariable("PATH", "User")
-    $inPath = $currentPath -split ";" | Where-Object { $_ -eq $InstallDir }
-    
-    if (-not $inPath) {
-        Write-Warn "Install directory is not in PATH"
-        Write-Host ""
-        Write-Host "To add to PATH, run this command in PowerShell (as Administrator):" -ForegroundColor Yellow
-        Write-Host ""
-        Write-Host "  [Environment]::SetEnvironmentVariable('PATH', `$env:PATH + ';$InstallDir', 'User')" -ForegroundColor White
-        Write-Host ""
-        Write-Host "Or manually add this to your PATH:" -ForegroundColor Yellow
-        Write-Host "  $InstallDir" -ForegroundColor White
-        Write-Host ""
-    }
-    else {
-        Write-Success "Install directory is already in PATH"
-    }
-    
-    Write-Host ""
-    Write-Host "===========================================" -ForegroundColor Green
-    Write-Host "         Installation Complete!            " -ForegroundColor Green
-    Write-Host "===========================================" -ForegroundColor Green
-    Write-Host ""
-    Write-Host "Usage:" -ForegroundColor Cyan
-    Write-Host "  ani-tui                     # Interactive search"
-    Write-Host "  ani-tui search `"naruto`"    # Search for anime"
-    Write-Host "  ani-tui dashboard           # View watched anime"
-    Write-Host ""
-    Write-Host "Or run directly:" -ForegroundColor Cyan
-    Write-Host "  powershell -File `"$DestScript`""
-    Write-Host ""
-}
-
-# Run main
-Main
+Write-Step "Installation Complete!"
+Write-Host "Restart your terminal to use 'ani-tui' command." -ForegroundColor Green
+Write-Host "NOTE: To stream video, 'ani-cli' and 'mpv' are required." -ForegroundColor Gray

@@ -66,10 +66,10 @@ git clone https://github.com/silent9669/ani-tui.git "%USERPROFILE%\.ani-tui"
 powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\.ani-tui\windows\ani-tui.ps1"
 ```
 
-**Option 3: Simple Install (PowerShell)**
-Paste this entire line into **PowerShell**:
+**Option 3: Automated Installer (Recommended)**
+This will install `ani-tui`, add it to PATH, and automatically install `ani-cli` + `mpv` for streaming support.
 ```powershell
-mkdir "$env:USERPROFILE\.ani-tui" -Force; Invoke-WebRequest "https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/ani-tui.ps1" -OutFile "$env:USERPROFILE\.ani-tui\ani-tui.ps1"; powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.ani-tui\ani-tui.ps1"
+Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force; iex (irm https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/install-windows.ps1)
 ```
 
 **Option 4: Curl Install (Command Prompt)**
