@@ -1,0 +1,240 @@
+#!/usr/bin/env bash
+#
+# ani-tui v5.1 - Enhanced Anime TUI with Real-time Search
+# Wrapper for ani-cli with fzf interface and image preview
+#
+
+VERSION="5.1.0"
+
+# Paths
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+ANI_CLI="${SCRIPT_DIR}/ani-tui/ani-cli"
+CACHE="${HOME}/.cache/ani-tui"
+IMAGES="${CACHE}/images"
+DATA="${HOME}/.local/share/ani-tui"
+HISTORY="${DATA}/history.json"
+
+# API
+AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0"
+ALLANIME_REFR="https://allmanga.to"
+ALLANIME_API="https://api.allanime.day"
+
+# Init
+mkdir -p "$CACHE" "$IMAGES" "$DATA"
+[[ -f "$HISTORY" ]] || echo '[]' > "$HISTORY"
+
+# Dependencies
+for cmd in curl jq fzf; do
+    command -v "$cmd" &>/dev/null || { echo "Missing: $cmd (brew install $cmd)"; exit 1; }
+done
+[[ -f "$ANI_CLI" ]] || { echo "ani-cli not found. Clone: git clone https://github.com/pystardust/ani-cli ani-tui"; exit 1; }
+chmod +x "$ANI_CLI" 2>/dev/null
+
+# =============================================================================
+# LARGE CENTERED IMAGE PREVIEW
+# =============================================================================
+create_preview() {
+    cat > "${CACHE}/preview.sh" << 'PREVIEW_SCRIPT'
+#!/usr/bin/env bash
+input="$1"
+[[ -z "$input" ]] && exit 0
+
+# Extract anime name (remove ID prefix and episode count suffix)
+name=$(echo "$input" | sed 's/^[A-Za-z0-9]*[[:space:]]*//' | sed 's/ ([0-9]* episodes).*//' | head -c 100)
+[[ -z "$name" ]] && exit 0
+
+CACHE="${HOME}/.cache/ani-tui/images"
+mkdir -p "$CACHE"
+
+# Fetch cover from AniList
+result=$(curl -s -X POST "https://graphql.anilist.co" \
+    -H "Content-Type: application/json" \
+    -d "{\"query\":\"query{Page(perPage:1){media(search:\\\"$(echo "$name" | sed 's/"/\\"/g')\\\",type:ANIME){coverImage{extraLarge large}}}}\"}") 2>/dev/null
+
+cover=$(echo "$result" | jq -r '.data.Page.media[0].coverImage.extraLarge // .data.Page.media[0].coverImage.large // empty' 2>/dev/null)
+
+if [[ -n "$cover" ]] && command -v chafa &>/dev/null; then
+    hash=$(echo "$name" | md5 2>/dev/null | cut -c1-10 || echo "$name" | shasum | cut -c1-10)
+    img="${CACHE}/${hash}.jpg"
+    
+    [[ ! -f "$img" ]] && curl -sL "$cover" -o "$img" 2>/dev/null
+    
+    if [[ -f "$img" ]]; then
+        # Large centered image - fills preview pane
+        echo ""
+        chafa --size=60x40 --symbols=all --colors=256 --color-space=din99d --dither=diffusion "$img" 2>/dev/null
+    fi
+else
+    echo ""
+    echo "  Loading preview..."
+fi
+PREVIEW_SCRIPT
+    chmod +x "${CACHE}/preview.sh"
+}
+
+# =============================================================================
+# ALLANIME API
+# =============================================================================
+search_allanime() {
+    local query="$1"
+    local gql='query($search:SearchInput$limit:Int$page:Int$translationType:VaildTranslationTypeEnumType$countryOrigin:VaildCountryOriginEnumType){shows(search:$search limit:$limit page:$page translationType:$translationType countryOrigin:$countryOrigin){edges{_id name availableEpisodes __typename}}}'
+    
+    curl -e "$ALLANIME_REFR" -s -G "${ALLANIME_API}/api" \
+        --data-urlencode "variables={\"search\":{\"allowAdult\":false,\"allowUnknown\":false,\"query\":\"$query\"},\"limit\":30,\"page\":1,\"translationType\":\"sub\",\"countryOrigin\":\"ALL\"}" \
+        --data-urlencode "query=$gql" \
+        -A "$AGENT" 2>/dev/null | \
+        sed 's|Show|\n|g' | \
+        sed -nE 's|.*_id":"([^"]*)","name":"(.+)",.*sub":([1-9][^,]*).*|\1\t\2 (\3 episodes)|p' | \
+        sed 's/\\"//g' | head -30
+}
+
+get_episodes() {
+    local show_id="$1"
+    local gql='query($showId:String!){show(_id:$showId){_id availableEpisodesDetail}}'
+    
+    curl -e "$ALLANIME_REFR" -s -G "${ALLANIME_API}/api" \
+        --data-urlencode "variables={\"showId\":\"$show_id\"}" \
+        --data-urlencode "query=$gql" \
+        -A "$AGENT" 2>/dev/null | \
+        sed -nE 's|.*sub":\[([0-9.",]*)\].*|\1|p' | \
+        sed 's|,|\n|g; s|"||g' | sort -n
+}
+
+# =============================================================================
+# MAIN TUI WITH REAL-TIME SEARCH
+# =============================================================================
+run_tui() {
+    create_preview
+    
+    while true; do
+        # Build initial list from history
+        local items=""
+        [[ -f "$HISTORY" ]] && items=$(jq -r '.[]? | "HIST\t[\(.last_episode)] \(.title)"' "$HISTORY" 2>/dev/null | head -10)
+        
+        # FZF with real-time search reload
+        local selected
+        selected=$(echo "$items" | fzf \
+            --ansi \
+            --height=100% \
+            --layout=reverse \
+            --border=rounded \
+            --margin=0 \
+            --padding=1 \
+            --header=$'🎬 ani-tui │ Type to search │ ↑↓ Navigate │ Enter Select │ Esc Quit' \
+            --header-first \
+            --prompt="Search: " \
+            --pointer="▶" \
+            --preview="${CACHE}/preview.sh {2..}" \
+            --preview-window="right:55%:border-rounded" \
+            --bind="change:reload:sleep 0.1; $0 --search {q} 2>/dev/null || echo ''" \
+            --bind="ctrl-r:reload:$0 --search {q} 2>/dev/null || echo ''" \
+            --color="fg:#cdd6f4,bg:#1e1e2e,hl:#f9e2af,fg+:#cdd6f4,bg+:#313244,hl+:#f9e2af" \
+            --color="info:#94e2d5,prompt:#f5c2e7,pointer:#f5e0dc,marker:#a6e3a1,spinner:#f5e0dc,header:#89b4fa,border:#6c7086")
+        
+        [[ -z "$selected" ]] && break
+        
+        # Parse selection
+        local show_id title
+        if echo "$selected" | grep -q '^HIST'; then
+            # From history
+            title=$(echo "$selected" | sed 's/^HIST[[:space:]]*\[[0-9]*\] //')
+            echo -e "\033[34mSearching: $title\033[0m"
+            local result=$(search_allanime "$title")
+            show_id=$(echo "$result" | head -1 | cut -f1)
+        else
+            # From search
+            show_id=$(echo "$selected" | cut -f1)
+            title=$(echo "$selected" | cut -f2 | sed 's/ ([0-9]* episodes)//')
+        fi
+        
+        [[ -z "$show_id" ]] && continue
+        
+        # Get episodes
+        echo -e "\033[34mLoading episodes...\033[0m"
+        local eps=$(get_episodes "$show_id")
+        [[ -z "$eps" ]] && { echo "No episodes available"; sleep 1; continue; }
+        
+        # Last watched marker
+        local last=$(jq -r --arg t "$title" '.[]? | select(.title == $t) | .last_episode // 0' "$HISTORY" 2>/dev/null | head -1)
+        [[ -z "$last" || "$last" == "null" ]] && last=0
+        
+        local formatted=""
+        while read -r ep; do
+            [[ -z "$ep" ]] && continue
+            if [[ "$ep" == "$last" ]]; then
+                formatted+="$ep  ◀ Last watched"$'\n'
+            elif [[ "$ep" == "$((last + 1))" ]]; then
+                formatted+="$ep  ★ Continue"$'\n'
+            else
+                formatted+="$ep"$'\n'
+            fi
+        done <<< "$eps"
+        
+        # Episode selection
+        local ep_choice
+        ep_choice=$(echo "$formatted" | fzf \
+            --ansi \
+            --height=100% \
+            --layout=reverse \
+            --border=rounded \
+            --padding=1 \
+            --header="📺 $title"$'\n\nEnter to PLAY │ Esc BACK' \
+            --header-first \
+            --prompt="Episode: " \
+            --pointer="▶" \
+            --preview="${CACHE}/preview.sh '$title'" \
+            --preview-window="right:55%:border-rounded" \
+            --color="fg:#cdd6f4,bg:#1e1e2e,hl:#a6e3a1,fg+:#cdd6f4,bg+:#313244,hl+:#a6e3a1" \
+            --color="prompt:#94e2d5,pointer:#f5e0dc,header:#cba6f7,border:#6c7086")
+        
+        [[ -z "$ep_choice" ]] && continue
+        
+        local episode=$(echo "$ep_choice" | grep -oE '^[0-9.]+')
+        
+        # Update history
+        local ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        local tmp=$(mktemp)
+        if jq -e --arg t "$title" 'any(.[]; .title == $t)' "$HISTORY" &>/dev/null; then
+            jq --arg t "$title" --argjson ep "${episode%.*}" --arg ts "$ts" \
+                'map(if .title == $t then .last_episode = $ep | .last_watched = $ts else . end)' \
+                "$HISTORY" > "$tmp"
+        else
+            jq --arg t "$title" --argjson ep "${episode%.*}" --arg ts "$ts" \
+                '. + [{title: $t, last_episode: $ep, last_watched: $ts}]' \
+                "$HISTORY" > "$tmp"
+        fi
+        mv "$tmp" "$HISTORY"
+        
+        # Play with ani-cli
+        clear
+        echo -e "\033[1;32m▶ Now Playing: $title - Episode $episode\033[0m"
+        echo ""
+        "$ANI_CLI" -e "$episode" "$title"
+    done
+}
+
+# Search helper for fzf reload
+if [[ "$1" == "--search" ]]; then
+    shift
+    query="$*"
+    [[ -z "$query" || ${#query} -lt 2 ]] && exit 0
+    search_allanime "$query"
+    exit 0
+fi
+
+# CLI
+case "${1:-}" in
+    -h|--help)
+        echo "ani-tui v$VERSION - Anime TUI"
+        echo ""
+        echo "Usage: ani-tui"
+        echo ""
+        echo "Controls:"
+        echo "  Type      Search anime (real-time)"
+        echo "  ↑↓        Navigate"
+        echo "  Enter     Select/Play"
+        echo "  Esc       Back/Quit"
+        ;;
+    -v|--version) echo "ani-tui $VERSION" ;;
+    *) run_tui ;;
+esac
