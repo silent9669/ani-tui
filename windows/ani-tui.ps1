@@ -338,7 +338,7 @@ function Show-FuzzyMenu {
         Write-Host ""
         Write-Host "  $Header" -ForegroundColor Cyan
         Write-Host "  Filter: $filterText" -ForegroundColor Yellow
-        Write-Host "  (Type to filter, ↑↓ to navigate, Enter to select, Esc to cancel)" -ForegroundColor DarkGray
+        Write-Host "  (Type to filter, Up/Down to navigate, Enter to select, Esc to cancel)" -ForegroundColor DarkGray
         Write-Host ""
         
         # Show items (max 15)
