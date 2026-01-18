@@ -72,6 +72,12 @@ Paste this entire line into **PowerShell**:
 mkdir "$env:USERPROFILE\.ani-tui" -Force; Invoke-WebRequest "https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/ani-tui.ps1" -OutFile "$env:USERPROFILE\.ani-tui\ani-tui.ps1"; powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.ani-tui\ani-tui.ps1"
 ```
 
+### Windows Troubleshooting
+If you see errors like "destination path already exists" or "Unexpected token", run this **Clean Reinstall** command in PowerShell:
+```powershell
+Remove-Item "$env:USERPROFILE\.ani-tui" -Recurse -Force -ErrorAction SilentlyContinue; mkdir "$env:USERPROFILE\.ani-tui" -Force; Invoke-WebRequest "https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/ani-tui.ps1" -OutFile "$env:USERPROFILE\.ani-tui\ani-tui.ps1"; powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.ani-tui\ani-tui.ps1"
+```
+
 ---
 
 ## Usage
