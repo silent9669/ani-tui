@@ -1,22 +1,14 @@
 <#
 .SYNOPSIS
-    ani-tui - Enhanced anime TUI for Windows
-
+    ani-tui v5.1 - Enhanced Anime TUI for Windows
+    
 .DESCRIPTION
-    Terminal-based anime search and dashboard with AniList integration.
-    Windows PowerShell implementation with text-based UI.
-
+    Terminal-based anime browser with fzf interface, image previews, and streaming.
+    Windows PowerShell implementation matching macOS functionality.
+    
 .EXAMPLE
-    .\ani-tui.ps1
-    Interactive search mode
-
-.EXAMPLE
-    .\ani-tui.ps1 search "naruto"
-    Search for anime
-
-.EXAMPLE
-    .\ani-tui.ps1 dashboard
-    View watched anime dashboard
+    ani-tui
+    Interactive TUI mode with watch history
 #>
 
 [CmdletBinding()]
@@ -35,199 +27,136 @@ param(
 # CONFIGURATION
 # =============================================================================
 
-$script:VERSION = "1.0.0"
-$script:SCRIPT_NAME = "ani-tui"
+$script:VERSION = "5.1.0"
 
-# Directories
+# Directories (matching macOS paths style)
 $script:DATA_DIR = Join-Path $env:USERPROFILE ".ani-tui"
 $script:CACHE_DIR = Join-Path $script:DATA_DIR "cache"
-$script:METADATA_CACHE = Join-Path $script:CACHE_DIR "metadata.json"
+$script:IMAGES_DIR = Join-Path $script:CACHE_DIR "images"
 $script:HISTORY_FILE = Join-Path $script:DATA_DIR "history.json"
 
-# API Configuration
+# AllAnime API (same as macOS)
+$script:ALLANIME_API = "https://api.allanime.day"
+$script:ALLANIME_REFR = "https://allmanga.to"
 $script:ANILIST_API = "https://graphql.anilist.co"
-$script:USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+$script:USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0"
+
+# Catppuccin Mocha colors for fzf (same as macOS)
+$script:FZF_COLORS = "fg:#cdd6f4,bg:#1e1e2e,hl:#f9e2af,fg+:#cdd6f4,bg+:#313244,hl+:#f9e2af,info:#94e2d5,prompt:#f5c2e7,pointer:#f5e0dc,marker:#a6e3a1,spinner:#f5e0dc,header:#89b4fa,border:#6c7086"
 
 # =============================================================================
-# UTILITY FUNCTIONS
+# INITIALIZATION
 # =============================================================================
 
-function Write-Info {
-    param([string]$Message)
-    Write-Host "[INFO] " -ForegroundColor Blue -NoNewline
-    Write-Host $Message
-}
-
-function Write-Warn {
-    param([string]$Message)
-    Write-Host "[WARN] " -ForegroundColor Yellow -NoNewline
-    Write-Host $Message
-}
-
-function Write-Error2 {
-    param([string]$Message)
-    Write-Host "[ERROR] " -ForegroundColor Red -NoNewline
-    Write-Host $Message
-}
-
-function Write-Success {
-    param([string]$Message)
-    Write-Host "[OK] " -ForegroundColor Green -NoNewline
-    Write-Host $Message
-}
-
-# =============================================================================
-# DIRECTORY SETUP
-# =============================================================================
-
-function Ensure-Directories {
-    if (-not (Test-Path $script:DATA_DIR)) {
-        New-Item -ItemType Directory -Path $script:DATA_DIR -Force | Out-Null
-    }
-    if (-not (Test-Path $script:CACHE_DIR)) {
-        New-Item -ItemType Directory -Path $script:CACHE_DIR -Force | Out-Null
-    }
-    if (-not (Test-Path $script:METADATA_CACHE)) {
-        "{}" | Out-File -FilePath $script:METADATA_CACHE -Encoding UTF8
+function Initialize-Directories {
+    @($script:DATA_DIR, $script:CACHE_DIR, $script:IMAGES_DIR) | ForEach-Object {
+        if (-not (Test-Path $_)) {
+            New-Item -ItemType Directory -Path $_ -Force | Out-Null
+        }
     }
     if (-not (Test-Path $script:HISTORY_FILE)) {
-        "[]" | Out-File -FilePath $script:HISTORY_FILE -Encoding UTF8
+        "[]" | Out-File -FilePath $script:HISTORY_FILE -Encoding UTF8 -NoNewline
+    }
+}
+
+function Test-Dependencies {
+    $missing = @()
+    
+    if (-not (Get-Command "fzf" -ErrorAction SilentlyContinue)) {
+        $missing += "fzf"
+    }
+    if (-not (Get-Command "curl" -ErrorAction SilentlyContinue)) {
+        $missing += "curl"
+    }
+    
+    if ($missing.Count -gt 0) {
+        Write-Host "Missing dependencies: $($missing -join ', ')" -ForegroundColor Red
+        Write-Host "Install via: scoop install $($missing -join ' ')" -ForegroundColor Yellow
+        exit 1
     }
 }
 
 # =============================================================================
-# ANILIST API FUNCTIONS
+# ALLANIME API FUNCTIONS (matching macOS)
 # =============================================================================
 
-function Search-AniList {
+function Search-AllAnime {
     param([string]$Query)
     
-    $gqlQuery = @"
-query (`$search: String) {
-    Page(page: 1, perPage: 40) {
-        media(search: `$search, type: ANIME, sort: POPULARITY_DESC) {
-            id
-            title {
-                romaji
-                english
+    $gql = 'query($search:SearchInput$limit:Int$page:Int$translationType:VaildTranslationTypeEnumType$countryOrigin:VaildCountryOriginEnumType){shows(search:$search limit:$limit page:$page translationType:$translationType countryOrigin:$countryOrigin){edges{_id name availableEpisodes __typename}}}'
+    
+    $variables = @{
+        search = @{
+            allowAdult = $false
+            allowUnknown = $false
+            query = $Query
+        }
+        limit = 30
+        page = 1
+        translationType = "sub"
+        countryOrigin = "ALL"
+    } | ConvertTo-Json -Compress
+    
+    $uri = "$script:ALLANIME_API/api?variables=$([uri]::EscapeDataString($variables))&query=$([uri]::EscapeDataString($gql))"
+    
+    try {
+        $response = Invoke-RestMethod -Uri $uri -Headers @{
+            "User-Agent" = $script:USER_AGENT
+            "Referer" = $script:ALLANIME_REFR
+        } -TimeoutSec 10
+        
+        $results = @()
+        if ($response.data.shows.edges) {
+            foreach ($show in $response.data.shows.edges) {
+                $eps = $show.availableEpisodes.sub
+                if ($eps -and $eps -gt 0) {
+                    $results += "$($show._id)`t$($show.name) ($eps episodes)"
+                }
             }
-            coverImage {
-                large
-            }
-            episodes
-            status
-            averageScore
-            description(asHtml: false)
-            genres
         }
-    }
-}
-"@
-
-    $body = @{
-        query = $gqlQuery
-        variables = @{
-            search = $Query
-        }
-    } | ConvertTo-Json -Depth 10
-
-    try {
-        $response = Invoke-RestMethod -Uri $script:ANILIST_API `
-            -Method Post `
-            -Headers @{ "User-Agent" = $script:USER_AGENT } `
-            -ContentType "application/json" `
-            -Body $body
-        return $response
+        return $results
     }
     catch {
-        Write-Error2 "Failed to fetch from AniList API: $_"
-        return $null
+        return @()
     }
 }
 
-function Get-AnimeById {
-    param([int]$AnimeId)
+function Get-Episodes {
+    param([string]$ShowId)
     
-    $gqlQuery = @"
-query (`$id: Int) {
-    Media(id: `$id, type: ANIME) {
-        id
-        title {
-            romaji
-            english
-        }
-        coverImage {
-            large
-        }
-        episodes
-        status
-        averageScore
-        description(asHtml: false)
-        genres
-    }
-}
-"@
-
-    $body = @{
-        query = $gqlQuery
-        variables = @{
-            id = $AnimeId
-        }
-    } | ConvertTo-Json -Depth 10
-
+    $gql = 'query($showId:String!){show(_id:$showId){_id availableEpisodesDetail}}'
+    $variables = @{ showId = $ShowId } | ConvertTo-Json -Compress
+    
+    $uri = "$script:ALLANIME_API/api?variables=$([uri]::EscapeDataString($variables))&query=$([uri]::EscapeDataString($gql))"
+    
     try {
-        $response = Invoke-RestMethod -Uri $script:ANILIST_API `
-            -Method Post `
-            -Headers @{ "User-Agent" = $script:USER_AGENT } `
-            -ContentType "application/json" `
-            -Body $body
-        return $response.data.Media
+        $response = Invoke-RestMethod -Uri $uri -Headers @{
+            "User-Agent" = $script:USER_AGENT
+            "Referer" = $script:ALLANIME_REFR
+        } -TimeoutSec 10
+        
+        $episodes = @()
+        if ($response.data.show.availableEpisodesDetail.sub) {
+            $episodes = $response.data.show.availableEpisodesDetail.sub | Sort-Object { [double]$_ }
+        }
+        return $episodes
     }
     catch {
-        return $null
+        return @()
     }
 }
 
 # =============================================================================
-# CACHING FUNCTIONS
-# =============================================================================
-
-function Get-CachedMetadata {
-    param([string]$AnimeId)
-    
-    try {
-        $cache = Get-Content $script:METADATA_CACHE -Raw | ConvertFrom-Json
-        if ($cache.PSObject.Properties.Name -contains $AnimeId) {
-            return $cache.$AnimeId
-        }
-    }
-    catch { }
-    return $null
-}
-
-function Set-CachedMetadata {
-    param(
-        [string]$AnimeId,
-        [object]$Metadata
-    )
-    
-    try {
-        $cache = Get-Content $script:METADATA_CACHE -Raw | ConvertFrom-Json
-        $cache | Add-Member -NotePropertyName $AnimeId -NotePropertyValue $Metadata -Force
-        $cache | ConvertTo-Json -Depth 10 | Out-File -FilePath $script:METADATA_CACHE -Encoding UTF8
-    }
-    catch {
-        @{ $AnimeId = $Metadata } | ConvertTo-Json -Depth 10 | Out-File -FilePath $script:METADATA_CACHE -Encoding UTF8
-    }
-}
-
-# =============================================================================
-# HISTORY FUNCTIONS
+# HISTORY FUNCTIONS (matching macOS format)
 # =============================================================================
 
 function Get-WatchHistory {
     try {
-        $history = Get-Content $script:HISTORY_FILE -Raw | ConvertFrom-Json
+        $content = Get-Content $script:HISTORY_FILE -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($content)) { return @() }
+        $history = $content | ConvertFrom-Json
+        if ($null -eq $history) { return @() }
+        if ($history -isnot [array]) { return @($history) }
         return $history
     }
     catch {
@@ -235,262 +164,293 @@ function Get-WatchHistory {
     }
 }
 
-function Add-WatchHistory {
+function Update-WatchHistory {
     param(
-        [int]$AnimeId,
         [string]$Title,
-        [int]$Episode,
-        [string]$CoverUrl = ""
+        [int]$Episode
     )
     
     $timestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
     $history = Get-WatchHistory
     
-    # Convert to array if single object
-    if ($history -isnot [array]) {
-        $history = @($history)
-    }
-    
-    $existingIndex = -1
+    $found = $false
     for ($i = 0; $i -lt $history.Count; $i++) {
-        if ($history[$i].id -eq $AnimeId) {
-            $existingIndex = $i
+        if ($history[$i].title -eq $Title) {
+            $history[$i].last_episode = $Episode
+            $history[$i].last_watched = $timestamp
+            $found = $true
             break
         }
     }
     
-    if ($existingIndex -ge 0) {
-        $history[$existingIndex].last_episode = $Episode
-        $history[$existingIndex].last_watched = $timestamp
-    }
-    else {
-        $newEntry = @{
-            id = $AnimeId
+    if (-not $found) {
+        $history += @{
             title = $Title
             last_episode = $Episode
             last_watched = $timestamp
-            cover_url = $CoverUrl
         }
-        $history += $newEntry
     }
     
     $history | ConvertTo-Json -Depth 10 | Out-File -FilePath $script:HISTORY_FILE -Encoding UTF8
 }
 
-function Remove-WatchHistory {
-    param([int]$AnimeId)
+function Remove-FromHistory {
+    param([string]$Title)
     
     $history = Get-WatchHistory
-    $history = $history | Where-Object { $_.id -ne $AnimeId }
-    
+    $history = $history | Where-Object { $_.title -ne $Title }
     if ($null -eq $history) { $history = @() }
-    
     $history | ConvertTo-Json -Depth 10 | Out-File -FilePath $script:HISTORY_FILE -Encoding UTF8
 }
 
 # =============================================================================
-# FUZZY SEARCH (Simple PowerShell Implementation)
+# PREVIEW SCRIPT CREATION
 # =============================================================================
 
-function Show-FuzzyMenu {
-    param(
-        [array]$Items,
-        [string]$Header = "Select item:",
-        [scriptblock]$DisplayFormatter = { param($item) $item },
-        [scriptblock]$OnPreview = $null
-    )
-    
-    if ($Items.Count -eq 0) {
-        Write-Warn "No items to display"
-        return $null
-    }
-    
-    $filterText = ""
-    $selectedIndex = 0
-    $filteredItems = $Items
-    
-    # Clear screen
-    Clear-Host
-    
-    while ($true) {
-        # Filter items
-        if ($filterText) {
-            $filteredItems = $Items | Where-Object { 
-                $display = & $DisplayFormatter $_
-                $display -like "*$filterText*"
-            }
-        }
-        else {
-            $filteredItems = $Items
-        }
-        
-        if ($filteredItems.Count -eq 0) {
-            $filteredItems = @()
-        }
-        
-        # Ensure selected index is valid
-        if ($selectedIndex -ge $filteredItems.Count) {
-            $selectedIndex = [Math]::Max(0, $filteredItems.Count - 1)
-        }
-        
-        # Render
-        Clear-Host
-        Write-Host ""
-        Write-Host "  $Header" -ForegroundColor Cyan
-        Write-Host "  Filter: $filterText" -ForegroundColor Yellow
-        Write-Host "  (Type to filter, Up/Down to navigate, Enter to select, Esc to cancel)" -ForegroundColor DarkGray
-        Write-Host ""
-        
-        # Show items (max 15)
-        $startIndex = [Math]::Max(0, $selectedIndex - 7)
-        $endIndex = [Math]::Min($filteredItems.Count, $startIndex + 15)
-        
-        for ($i = $startIndex; $i -lt $endIndex; $i++) {
-            $display = & $DisplayFormatter $filteredItems[$i]
-        if ($i -eq $selectedIndex) {
-                Write-Host "  > " -ForegroundColor Green -NoNewline
-                Write-Host $display -ForegroundColor White
-            }
-            else {
-                Write-Host "    $display" -ForegroundColor Gray
-            }
-        }
-        
-        # Show preview if available
-        if ($OnPreview -and $filteredItems.Count -gt 0) {
-            Write-Host ""
-            Write-Host "  -------------------------------------" -ForegroundColor DarkGray
-            & $OnPreview $filteredItems[$selectedIndex]
-        }
-        
-        Write-Host ""
-        Write-Host "  $($filteredItems.Count) items" -ForegroundColor DarkGray
-        
-        # Read key
-        $key = [Console]::ReadKey($true)
-        
-        switch ($key.Key) {
-            "UpArrow" {
-                if ($selectedIndex -gt 0) { $selectedIndex-- }
-            }
-            "DownArrow" {
-                if ($selectedIndex -lt $filteredItems.Count - 1) { $selectedIndex++ }
-            }
-            "Enter" {
-                if ($filteredItems.Count -gt 0) {
-                    return $filteredItems[$selectedIndex]
-                }
-            }
-            "Escape" {
-                return $null
-            }
-            "Backspace" {
-                if ($filterText.Length -gt 0) {
-                    $filterText = $filterText.Substring(0, $filterText.Length - 1)
-                }
-            }
-            default {
-                if ($key.KeyChar -match '[\w\s\-]') {
-                    $filterText += $key.KeyChar
-                }
-            }
+function Create-PreviewScript {
+    $previewScript = @'
+param([string]$Input)
+
+if ([string]::IsNullOrWhiteSpace($Input)) { exit 0 }
+
+$CACHE = Join-Path $env:USERPROFILE ".ani-tui\cache\images"
+if (-not (Test-Path $CACHE)) { New-Item -ItemType Directory -Path $CACHE -Force | Out-Null }
+
+# Extract title - remove HIST prefix and episode markers
+$name = $Input
+$name = $name -replace '^HIST\s*', ''
+$name = $name -replace '^\[\d+\]\s*', ''
+$name = $name -replace '\s+\d+\s+eps($|\s)', ' '
+$name = $name -replace '\s*\(\d+\s+episodes\)$', ''
+$name = $name -replace '\s*\[[A-Z]+\]\s*$', ''
+$name = $name -replace '\s*-\s*$', ''
+$name = $name.Trim()
+
+if ([string]::IsNullOrWhiteSpace($name)) { exit 0 }
+
+# Fetch cover from AniList
+$gql = @"
+query {
+    Page(perPage: 1) {
+        media(search: "$($name -replace '"', '\"')", type: ANIME) {
+            coverImage { extraLarge large }
         }
     }
 }
+"@
 
-# =============================================================================
-# SEARCH MODE
-# =============================================================================
-
-function Invoke-SearchMode {
-    param([string]$Query = "")
+try {
+    $body = @{ query = $gql } | ConvertTo-Json -Compress
+    $response = Invoke-RestMethod -Uri "https://graphql.anilist.co" -Method Post -ContentType "application/json" -Body $body -TimeoutSec 5
     
-    if (-not $Query) {
-        $Query = Read-Host "Search anime"
-        if (-not $Query) {
-            Write-Warn "No search query provided"
-            return
-        }
-    }
+    $cover = $response.data.Page.media[0].coverImage.extraLarge
+    if (-not $cover) { $cover = $response.data.Page.media[0].coverImage.large }
     
-    Write-Info "Searching for: $Query"
-    
-    $response = Search-AniList -Query $Query
-    
-    if (-not $response -or -not $response.data.Page.media) {
-        Write-Error2 "No results found for: $Query"
-        return
-    }
-    
-    $results = $response.data.Page.media
-    
-    # Cache all results
-    foreach ($media in $results) {
-        Set-CachedMetadata -AnimeId $media.id.ToString() -Metadata $media
-    }
-    
-    # Show selection menu
-    $selected = Show-FuzzyMenu -Items $results -Header "[SEARCH] Results for: $Query" `
-        -DisplayFormatter { 
-            param($item)
-            $title = if ($item.title.english) { $item.title.english } else { $item.title.romaji }
-            $eps = if ($item.episodes) { $item.episodes } else { '?' }
-            "$($item.id) - $title ($eps eps) [$($item.status)]"
-        } `
-        -OnPreview {
-            param($item)
-            $title = if ($item.title.english) { $item.title.english } else { $item.title.romaji }
-            Write-Host "  Title: " -NoNewline -ForegroundColor Green
-            Write-Host $title -ForegroundColor White
-            
-            $eps = if ($item.episodes) { $item.episodes } else { 'Unknown' }
-            Write-Host "  Episodes: $eps" -ForegroundColor Gray
-            
-            Write-Host "  Status: $($item.status)" -ForegroundColor Gray
-            
-            $score = if ($item.averageScore) { $item.averageScore } else { 'N/A' }
-            Write-Host "  Score: $score/100" -ForegroundColor Gray
-            if ($item.genres) {
-                Write-Host "  Genres: $($item.genres -join ', ')" -ForegroundColor Gray
-            }
-            if ($item.description) {
-                $desc = $item.description.Substring(0, [Math]::Min(200, $item.description.Length))
-                Write-Host "  Description: $desc..." -ForegroundColor DarkGray
-            }
-        }
-    
-    if (-not $selected) {
-        Write-Warn "No anime selected"
-        return
-    }
-    
-    $title = if ($selected.title.english) { $selected.title.english } else { $selected.title.romaji }
-    Write-Success "Selected: $title"
-    
-    $episode = Read-Host "Enter episode to watch (or press Enter to skip)"
-    
-    if ($episode) {
-        $coverUrl = $selected.coverImage.large
-        Add-WatchHistory -AnimeId $selected.id -Title $title -Episode ([int]$episode) -CoverUrl $coverUrl
+    if ($cover) {
+        # Create hash for filename
+        $hash = [System.BitConverter]::ToString([System.Security.Cryptography.MD5]::Create().ComputeHash([System.Text.Encoding]::UTF8.GetBytes($name))).Replace("-", "").Substring(0, 12).ToLower()
+        $imgPath = Join-Path $CACHE "$hash.jpg"
         
-        # STREAMING LOGIC
-        if (Get-Command "ani-cli" -ErrorAction SilentlyContinue) {
-            Write-Info "Launching ani-cli for streaming..."
-            # Try to pass title and episode. Syntax depends on ani-cli version, but generally "ani-cli title" works.
-            # We interactively launch it.
-            # Ideally: ani-cli -e <ep> <title>
-            Write-Host "Calling: ani-cli -e $episode `"$title`"" -ForegroundColor DarkGray
-            
-            # Start ani-cli in a new process to ensure it handles TUI correctly
-            Start-Process "ani-cli" -ArgumentList "-e", "$episode", "`"$title`"" -Wait -NoNewWindow
+        if (-not (Test-Path $imgPath)) {
+            Invoke-WebRequest -Uri $cover -OutFile $imgPath -TimeoutSec 10 | Out-Null
+        }
+        
+        # Render with chafa if available
+        if (Get-Command "chafa" -ErrorAction SilentlyContinue) {
+            Write-Host ""
+            Write-Host ""
+            & chafa --size=60x35 --symbols=all --colors=256 $imgPath 2>$null
         }
         else {
-            Write-Success "Recorded: Episode $episode of $title (History Only)"
             Write-Host ""
-            Write-Warn "Streamer 'ani-cli' not found."
-            Write-Host "To enable video streaming on Windows:" -ForegroundColor Cyan
-            Write-Host "  scoop bucket add extras"
-            Write-Host "  scoop install ani-cli mpv"
+            Write-Host "  $name" -ForegroundColor White
+            Write-Host ""
+            Write-Host "  (Install chafa for image previews: scoop install chafa)" -ForegroundColor DarkGray
+        }
+    }
+    else {
+        Write-Host ""
+        Write-Host "  $name" -ForegroundColor White
+        Write-Host ""
+        Write-Host "  Loading..." -ForegroundColor DarkGray
+    }
+}
+catch {
+    Write-Host ""
+    Write-Host "  $name" -ForegroundColor White
+}
+'@
+
+    $scriptPath = Join-Path $script:CACHE_DIR "preview.ps1"
+    $previewScript | Out-File -FilePath $scriptPath -Encoding UTF8
+    return $scriptPath
+}
+
+# =============================================================================
+# SEARCH HELPER (for fzf reload)
+# =============================================================================
+
+function Invoke-SearchHelper {
+    param([string]$Query)
+    
+    if ([string]::IsNullOrWhiteSpace($Query) -or $Query.Length -lt 2) {
+        exit 0
+    }
+    
+    $results = Search-AllAnime -Query $Query
+    $results | ForEach-Object { Write-Output $_ }
+    exit 0
+}
+
+# =============================================================================
+# MAIN TUI
+# =============================================================================
+
+function Start-TUI {
+    Initialize-Directories
+    Test-Dependencies
+    
+    $previewScript = Create-PreviewScript
+    $scriptPath = $MyInvocation.MyCommand.Path
+    if (-not $scriptPath) { $scriptPath = $PSCommandPath }
+    
+    while ($true) {
+        # Build initial list from history
+        $history = Get-WatchHistory
+        $items = @()
+        $history | Select-Object -First 10 | ForEach-Object {
+            $items += "HIST`t[$($_.last_episode)] $($_.title)"
+        }
+        
+        # Create temp file for initial items
+        $tempFile = [System.IO.Path]::GetTempFileName()
+        if ($items.Count -gt 0) {
+            $items -join "`n" | Out-File -FilePath $tempFile -Encoding UTF8 -NoNewline
+        }
+        else {
+            "" | Out-File -FilePath $tempFile -Encoding UTF8 -NoNewline
+        }
+        
+        # Build fzf command with real-time search
+        $fzfHeader = "ani-tui | Type to search | Up/Down Navigate | Enter Select | Ctrl-D Delete | Esc Quit"
+        
+        # Use cmd to handle the reload properly on Windows
+        $reloadCmd = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" --search {q}"
+        $deleteCmd = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" --delete {2}"
+        $historyReload = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" --history"
+        
+        $selected = Get-Content $tempFile -Raw | fzf `
+            --ansi `
+            --height=100% `
+            --layout=reverse `
+            --border=rounded `
+            --margin=0 `
+            --padding=1 `
+            --delimiter="`t" `
+            --with-nth=2 `
+            --header="$fzfHeader" `
+            --header-first `
+            --prompt="Search: " `
+            --pointer=">" `
+            --preview="powershell -NoProfile -ExecutionPolicy Bypass -File `"$previewScript`" {2}" `
+            --preview-window="right:50%:border-rounded" `
+            --bind="change:reload:$reloadCmd" `
+            --bind="ctrl-d:execute-silent($deleteCmd)+reload($historyReload)" `
+            --color="$script:FZF_COLORS"
+        
+        Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+        
+        if ([string]::IsNullOrWhiteSpace($selected)) { break }
+        
+        # Parse selection
+        $parts = $selected -split "`t", 2
+        $showId = $null
+        $title = $null
+        
+        if ($selected -match "^HIST") {
+            # From history - need to search for the show
+            $title = $parts[1] -replace '^\[\d+\]\s*', ''
+            Write-Host "Searching: $title" -ForegroundColor Blue
+            $searchResult = Search-AllAnime -Query $title
+            if ($searchResult.Count -gt 0) {
+                $showId = ($searchResult[0] -split "`t")[0]
+            }
+        }
+        else {
+            # From search
+            $showId = $parts[0]
+            $title = $parts[1] -replace '\s*\(\d+\s+episodes\)$', ''
+        }
+        
+        if ([string]::IsNullOrWhiteSpace($showId)) { continue }
+        
+        # Get episodes
+        Write-Host "Loading episodes..." -ForegroundColor Blue
+        $episodes = Get-Episodes -ShowId $showId
+        
+        if ($episodes.Count -eq 0) {
+            Write-Host "No episodes available" -ForegroundColor Yellow
+            Start-Sleep -Seconds 1
+            continue
+        }
+        
+        # Get last watched episode
+        $lastEp = 0
+        $history | ForEach-Object {
+            if ($_.title -eq $title) {
+                $lastEp = [int]$_.last_episode
+            }
+        }
+        
+        # Format episodes with markers
+        $epList = @()
+        foreach ($ep in $episodes) {
+            $epNum = [int]$ep
+            if ($epNum -eq $lastEp) {
+                $epList += "$ep  < Last watched"
+            }
+            elseif ($epNum -eq ($lastEp + 1)) {
+                $epList += "$ep  * Continue"
+            }
+            else {
+                $epList += "$ep"
+            }
+        }
+        
+        # Episode selection
+        $epChoice = $epList | fzf `
+            --ansi `
+            --height=100% `
+            --layout=reverse `
+            --border=rounded `
+            --padding=1 `
+            --header="$title`n`nEnter to PLAY | Esc BACK" `
+            --header-first `
+            --prompt="Episode: " `
+            --pointer=">" `
+            --preview="powershell -NoProfile -ExecutionPolicy Bypass -File `"$previewScript`" `"$title`"" `
+            --preview-window="right:55%:border-rounded" `
+            --color="fg:#cdd6f4,bg:#1e1e2e,hl:#a6e3a1,fg+:#cdd6f4,bg+:#313244,hl+:#a6e3a1,prompt:#94e2d5,pointer:#f5e0dc,header:#cba6f7,border:#6c7086"
+        
+        if ([string]::IsNullOrWhiteSpace($epChoice)) { continue }
+        
+        # Extract episode number
+        $episode = ($epChoice -split '\s+')[0]
+        
+        # Update history
+        Update-WatchHistory -Title $title -Episode ([int]$episode)
+        
+        # Play with ani-cli
+        Clear-Host
+        Write-Host "> Now Playing: $title - Episode $episode" -ForegroundColor Green
+        Write-Host ""
+        
+        if (Get-Command "ani-cli" -ErrorAction SilentlyContinue) {
+            & ani-cli -S 1 -e $episode "$title"
+        }
+        else {
+            Write-Host "ani-cli not found. Install with: scoop install ani-cli" -ForegroundColor Yellow
+            Write-Host "Episode $episode of $title recorded in history." -ForegroundColor Cyan
             Write-Host ""
             Write-Host "Press Enter to continue..."
             Read-Host | Out-Null
@@ -499,62 +459,29 @@ function Invoke-SearchMode {
 }
 
 # =============================================================================
-# DASHBOARD MODE
+# COMMAND HANDLERS (for fzf callbacks)
 # =============================================================================
 
-function Invoke-DashboardMode {
+if ($Command -eq "--search") {
+    $query = $Arguments -join " "
+    Invoke-SearchHelper -Query $query
+    exit 0
+}
+
+if ($Command -eq "--delete") {
+    $titleArg = $Arguments -join " "
+    $titleClean = $titleArg -replace '^\[\d+\]\s*', ''
+    Remove-FromHistory -Title $titleClean
+    exit 0
+}
+
+if ($Command -eq "--history") {
+    Initialize-Directories
     $history = Get-WatchHistory
-    
-    if (-not $history -or $history.Count -eq 0) {
-        Write-Warn "No watched anime in history."
-        Write-Host "Search for anime to add to your watch history."
-        return
+    $history | Select-Object -First 10 | ForEach-Object {
+        Write-Output "HIST`t[$($_.last_episode)] $($_.title)"
     }
-    
-    Write-Info "Loading dashboard with $($history.Count) anime..."
-    
-    $selected = Show-FuzzyMenu -Items $history -Header "[DASHBOARD] Watched Anime" `
-        -DisplayFormatter {
-            param($item)
-            "$($item.id) - $($item.title) (Ep: $($item.last_episode)) [$($item.last_watched.Substring(0, 10))]"
-        } `
-        -OnPreview {
-            param($item)
-            Write-Host "  Title: $($item.title)" -ForegroundColor White
-            Write-Host "  Last Episode: $($item.last_episode)" -ForegroundColor Cyan
-            Write-Host "  Last Watched: $($item.last_watched)" -ForegroundColor Gray
-            
-            # Try to get cached metadata for more info
-            $cached = Get-CachedMetadata -AnimeId $item.id.ToString()
-            if ($cached) {
-                Write-Host "  Status: $($cached.status)" -ForegroundColor Gray
-                if ($cached.genres) {
-                    Write-Host "  Genres: $($cached.genres -join ', ')" -ForegroundColor DarkGray
-                }
-            }
-        }
-    
-    if (-not $selected) {
-        Write-Warn "No anime selected"
-        return
-    }
-    
-    Write-Success "Selected: $($selected.title) (Last: Episode $($selected.last_episode))"
-    
-    $nextEp = $selected.last_episode + 1
-    $input = Read-Host "Continue with episode $nextEp? [Y/n/other]"
-    
-    if ($input -match '^[Nn]$') {
-        return
-    }
-    
-    $episode = $nextEp
-    if ($input -and $input -notmatch '^[Yy]$') {
-        $episode = [int]$input
-    }
-    
-    Add-WatchHistory -AnimeId $selected.id -Title $selected.title -Episode $episode -CoverUrl $selected.cover_url
-    Write-Success "Recorded: Episode $episode of $($selected.title)"
+    exit 0
 }
 
 # =============================================================================
@@ -562,70 +489,56 @@ function Invoke-DashboardMode {
 # =============================================================================
 
 function Show-Help {
-    @"
-    
-ani-tui - Enhanced anime TUI for Windows
+    Write-Host @"
+
+ani-tui v$script:VERSION - Anime TUI for Windows
 
 USAGE:
-    .\ani-tui.ps1                     Interactive search mode
-    .\ani-tui.ps1 search "<query>"    Search for anime
-    .\ani-tui.ps1 dashboard           View watched anime dashboard
+    ani-tui                     Interactive TUI mode
 
-OPTIONS:
-    -Help, -h        Show this help message
-    -Version, -v     Show version information
-
-EXAMPLES:
-    .\ani-tui.ps1                     Start interactive search
-    .\ani-tui.ps1 search "naruto"     Search for Naruto
-    .\ani-tui.ps1 dashboard           Open watch history dashboard
+CONTROLS:
+    Type        Search anime (real-time)
+    Up/Down     Navigate list
+    Enter       Select/Play
+    Ctrl-D      Delete from history
+    Esc         Back/Quit
 
 FILES:
     Cache:   $script:CACHE_DIR
     History: $script:HISTORY_FILE
 
+DEPENDENCIES:
+    Required: fzf, curl
+    Optional: chafa (image previews), ani-cli + mpv (streaming)
+
+INSTALL DEPS:
+    scoop install fzf chafa ani-cli mpv
+
 "@
 }
 
 function Show-Version {
-    Write-Host "ani-tui version $script:VERSION"
+    Write-Host "ani-tui $script:VERSION"
 }
 
 # =============================================================================
 # MAIN
 # =============================================================================
 
-function Main {
-    if ($Help) {
-        Show-Help
-        return
-    }
-    
-    if ($Version) {
-        Show-Version
-        return
-    }
-    
-    Ensure-Directories
-    
-    switch ($Command.ToLower()) {
-        "search" {
-            $query = $Arguments -join " "
-            Invoke-SearchMode -Query $query
-        }
-        "dashboard" {
-            Invoke-DashboardMode
-        }
-        "" {
-            Invoke-SearchMode
-        }
-        default {
-            # Treat as search query
-            $query = (@($Command) + $Arguments) -join " "
-            Invoke-SearchMode -Query $query
-        }
-    }
+if ($Help) {
+    Show-Help
+    exit 0
 }
 
-# Run main
-Main
+if ($Version) {
+    Show-Version
+    exit 0
+}
+
+switch ($Command.ToLower()) {
+    "-h" { Show-Help }
+    "--help" { Show-Help }
+    "-v" { Show-Version }
+    "--version" { Show-Version }
+    default { Start-TUI }
+}

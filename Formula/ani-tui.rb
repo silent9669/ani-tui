@@ -1,7 +1,7 @@
 class AniTui < Formula
   desc "Anime TUI with image previews and terminal streaming"
   homepage "https://github.com/silent9669/ani-tui"
-  url "https://github.com/silent9669/ani-tui/archive/refs/tags/v1.0.0.tar.gz"
+  url "https://github.com/silent9669/ani-tui/archive/refs/tags/v2.0.0.tar.gz"
   sha256 "PLACEHOLDER"  # Update after creating release
   license "GPL-3.0-or-later"
   head "https://github.com/silent9669/ani-tui.git", branch: "main"
