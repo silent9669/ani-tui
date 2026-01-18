@@ -143,151 +143,104 @@ powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0delete.ps1" %*
     $deleteCmd | Out-File "$script:SCRIPTS\delete.cmd" -Encoding ASCII
 
     # ==========================================================================
-    # PREVIEW HELPER - Image + Anime Info (hybrid approach)
+    # PREVIEW HELPER - Pure Batch Script (no PowerShell for image display)
     # ==========================================================================
-    $previewScript = @'
-[CmdletBinding()]
-param([Parameter(ValueFromRemainingArguments)][string[]]$InputArgs)
-$ErrorActionPreference = "SilentlyContinue"
-$inputText = ($InputArgs -join " ").Trim()
-if (!$inputText) { exit }
-
-$CACHE = "$env:USERPROFILE\.ani-tui\cache"
-$IMAGES = "$CACHE\images"
-$INFO_CACHE = "$CACHE\info"
-if (!(Test-Path $IMAGES)) { New-Item -ItemType Directory -Path $IMAGES -Force | Out-Null }
-if (!(Test-Path $INFO_CACHE)) { New-Item -ItemType Directory -Path $INFO_CACHE -Force | Out-Null }
-
-# Clean title
-$name = $inputText
-$name = $name -replace '^HIST\s*', ''
-$name = $name -replace '^\[\d+\]\s*', ''
-$name = $name -replace '\s*\(\d+\s+eps\)\s*$', ''
-$name = $name -replace '\s*\[[A-Z]+\]\s*$', ''
-$name = $name.Trim()
-
-if (!$name) { exit }
-
-# Generate hash for cache
-$bytes = [System.Text.Encoding]::UTF8.GetBytes($name)
-$md5 = [System.Security.Cryptography.MD5]::Create()
-$hash = [System.BitConverter]::ToString($md5.ComputeHash($bytes)).Replace("-", "").Substring(0, 12).ToLower()
-$imgPath = "$IMAGES\$hash.jpg"
-$infoPath = "$INFO_CACHE\$hash.json"
-
-# ============================================================================
-# PART 1: IMAGE PREVIEW (using same settings as macOS version)
-# ============================================================================
-$hasChafa = Get-Command chafa -ErrorAction SilentlyContinue
-
-if ($hasChafa) {
-    # Fetch image if not cached
-    if (!(Test-Path $imgPath)) {
-        try {
-            $escapedName = $name -replace '"', '\"'
-            $imgQuery = @{
-                query = "query{Page(perPage:1){media(search:`"$escapedName`",type:ANIME){coverImage{extraLarge large}}}}"
-            } | ConvertTo-Json -Compress
-            
-            $imgResponse = Invoke-RestMethod "https://graphql.anilist.co" -Method Post -ContentType "application/json" -Body $imgQuery -TimeoutSec 5
-            $coverUrl = $imgResponse.data.Page.media[0].coverImage.extraLarge
-            if (!$coverUrl) { $coverUrl = $imgResponse.data.Page.media[0].coverImage.large }
-            
-            if ($coverUrl) {
-                Invoke-WebRequest $coverUrl -OutFile $imgPath -TimeoutSec 8 | Out-Null
-            }
-        } catch {}
-    }
-    
-    # Display image with SAME settings as macOS version
-    if (Test-Path $imgPath) {
-        Write-Host ""
-        # Using macOS-matching settings: --size=70x45 --symbols=all --colors=256
-        & chafa --size=60x35 --symbols=all --colors=256 $imgPath 2>$null
-        Write-Host ""
-    }
-}
-
-# ============================================================================
-# PART 2: COMPACT ANIME INFO
-# ============================================================================
-$info = $null
-if (Test-Path $infoPath) {
-    try { $info = Get-Content $infoPath -Raw | ConvertFrom-Json } catch {}
-}
-
-if (!$info) {
-    try {
-        $escapedName = $name -replace '"', '\"'
-        $query = @{
-            query = "query{Page(perPage:1){media(search:`"$escapedName`",type:ANIME){title{english romaji native}averageScore status episodes format season seasonYear genres studios(isMain:true){nodes{name}}}}}"
-        } | ConvertTo-Json -Compress
-        
-        $response = Invoke-RestMethod "https://graphql.anilist.co" -Method Post -ContentType "application/json" -Body $query -TimeoutSec 5
-        $info = $response.data.Page.media[0]
-        
-        if ($info) {
-            $info | ConvertTo-Json -Depth 10 | Out-File $infoPath -Encoding UTF8
-        }
-    } catch {}
-}
-
-# Show title if no image was displayed
-if (!$hasChafa -or !(Test-Path $imgPath)) {
-    Write-Host ""
-    Write-Host "  $name" -ForegroundColor Cyan
-    Write-Host "  ────────────────────────────────" -ForegroundColor DarkGray
-}
-
-if ($info) {
-    # Title (if image shown, show compact title)
-    $title = if ($info.title.english) { $info.title.english } else { $info.title.romaji }
-    
-    if ($hasChafa -and (Test-Path $imgPath)) {
-        Write-Host "  $title" -ForegroundColor Cyan
-    }
-    
-    # Score | Status | Episodes (one line)
-    $score = if ($info.averageScore) { "$($info.averageScore)%" } else { "N/A" }
-    $status = if ($info.status) { $info.status } else { "?" }
-    $eps = if ($info.episodes) { "$($info.episodes) eps" } else { "? eps" }
-    $scoreColor = if ($info.averageScore -ge 80) { "Green" } elseif ($info.averageScore -ge 60) { "Yellow" } else { "Gray" }
-    
-    Write-Host "  " -NoNewline
-    Write-Host "★ $score" -NoNewline -ForegroundColor $scoreColor
-    Write-Host " | " -NoNewline -ForegroundColor DarkGray
-    Write-Host "$status" -NoNewline -ForegroundColor Magenta
-    Write-Host " | " -NoNewline -ForegroundColor DarkGray
-    Write-Host "$eps" -ForegroundColor White
-    
-    # Format | Season | Studio (one line)
-    $format = if ($info.format) { $info.format } else { "" }
-    $season = if ($info.season -and $info.seasonYear) { "$($info.season) $($info.seasonYear)" } else { "" }
-    $studio = if ($info.studios.nodes -and $info.studios.nodes.Count -gt 0) { $info.studios.nodes[0].name } else { "" }
-    
-    $parts = @($format, $season, $studio) | Where-Object { $_ }
-    if ($parts.Count -gt 0) {
-        Write-Host "  $($parts -join ' • ')" -ForegroundColor Gray
-    }
-    
-    # Genres (one line)
-    if ($info.genres -and $info.genres.Count -gt 0) {
-        $genreList = ($info.genres | Select-Object -First 4) -join " • "
-        Write-Host "  $genreList" -ForegroundColor DarkYellow
-    }
-} else {
-    if (!$hasChafa) {
-        Write-Host "  [Install chafa: scoop install chafa]" -ForegroundColor DarkGray
-    }
-}
-
-Write-Host ""
-'@
-    $previewScript | Out-File "$script:SCRIPTS\preview.ps1" -Encoding UTF8
-    
+    # Using batch script similar to macOS bash version for better compatibility
     $previewCmd = @'
 @echo off
-powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0preview.ps1" %*
+setlocal enabledelayedexpansion
+
+set "input=%*"
+if "%input%"=="" exit /b
+
+set "CACHE=%USERPROFILE%\.ani-tui\cache"
+set "IMAGES=%CACHE%\images"
+if not exist "%IMAGES%" mkdir "%IMAGES%" 2>nul
+
+:: Clean title - remove prefixes
+set "name=%input%"
+
+:: Remove HIST prefix
+set "name=!name:HIST=!"
+
+:: Remove leading [ and everything to ] (episode number)
+for /f "tokens=1,* delims=]" %%a in ("!name!") do (
+    set "temp=%%b"
+    if defined temp set "name=!temp!"
+)
+
+:: Remove (xx eps) suffix - simple approach
+for /f "tokens=1 delims=(" %%a in ("!name!") do set "name=%%a"
+
+:: Trim whitespace
+for /f "tokens=* delims= " %%a in ("!name!") do set "name=%%a"
+
+if "!name!"=="" exit /b
+
+:: Generate simple hash using certutil
+echo !name!> "%TEMP%\ani_hash_input.txt"
+for /f "skip=1 tokens=*" %%h in ('certutil -hashfile "%TEMP%\ani_hash_input.txt" MD5 2^>nul') do (
+    set "hash=%%h"
+    goto :got_hash
+)
+:got_hash
+set "hash=!hash: =!"
+set "hash=!hash:~0,12!"
+del "%TEMP%\ani_hash_input.txt" 2>nul
+
+set "imgfile=%IMAGES%\!hash!.jpg"
+
+:: Check for chafa
+where chafa >nul 2>&1
+if errorlevel 1 (
+    echo.
+    echo   !name!
+    echo   ────────────────────────────────
+    echo   [Install chafa: scoop install chafa]
+    exit /b
+)
+
+:: Fetch image if not cached
+if not exist "!imgfile!" (
+    :: Build GraphQL query
+    set "query={\"query\":\"query{Page(perPage:1){media(search:\\\"!name!\\\",type:ANIME){coverImage{extraLarge large}}}}\"}"
+    
+    :: Use curl.exe to fetch cover URL
+    for /f "tokens=*" %%u in ('curl.exe -s -X POST "https://graphql.anilist.co" -H "Content-Type: application/json" -d "!query!" 2^>nul ^| findstr /i "extraLarge"') do (
+        set "response=%%u"
+    )
+    
+    :: Extract URL from response (simple extraction)
+    if defined response (
+        for /f "tokens=2 delims=:" %%a in ("!response!") do (
+            set "url=%%a"
+            set "url=!url:~1!"
+            set "url=!url:\"=!"
+            set "url=!url:,=!"
+            set "url=!url:}=!"
+            set "url=https:!url!"
+        )
+        
+        if defined url (
+            curl.exe -sL "!url!" -o "!imgfile!" 2>nul
+        )
+    )
+)
+
+:: Display image with chafa
+echo.
+if exist "!imgfile!" (
+    chafa --size=60x35 --symbols=all --colors=256 "!imgfile!" 2>nul
+    echo.
+    echo   !name!
+) else (
+    echo   !name!
+    echo   ────────────────────────────────
+    echo   Loading...
+)
+echo.
+
+endlocal
 '@
     $previewCmd | Out-File "$script:SCRIPTS\preview.cmd" -Encoding ASCII
 }
