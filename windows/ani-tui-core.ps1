@@ -143,7 +143,7 @@ powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0delete.ps1" %*
     $deleteCmd | Out-File "$script:SCRIPTS\delete.cmd" -Encoding ASCII
 
     # ==========================================================================
-    # PREVIEW HELPER - High quality image display
+    # PREVIEW HELPER - Image + Anime Info (hybrid approach)
     # ==========================================================================
     $previewScript = @'
 [CmdletBinding()]
@@ -152,10 +152,13 @@ $ErrorActionPreference = "SilentlyContinue"
 $inputText = ($InputArgs -join " ").Trim()
 if (!$inputText) { exit }
 
-$IMAGES = "$env:USERPROFILE\.ani-tui\cache\images"
+$CACHE = "$env:USERPROFILE\.ani-tui\cache"
+$IMAGES = "$CACHE\images"
+$INFO_CACHE = "$CACHE\info"
 if (!(Test-Path $IMAGES)) { New-Item -ItemType Directory -Path $IMAGES -Force | Out-Null }
+if (!(Test-Path $INFO_CACHE)) { New-Item -ItemType Directory -Path $INFO_CACHE -Force | Out-Null }
 
-# Clean title - remove prefixes and suffixes
+# Clean title
 $name = $inputText
 $name = $name -replace '^HIST\s*', ''
 $name = $name -replace '^\[\d+\]\s*', ''
@@ -165,67 +168,120 @@ $name = $name.Trim()
 
 if (!$name) { exit }
 
-# Display title with nice formatting
-Write-Host ""
-Write-Host "  $name" -ForegroundColor Cyan
-Write-Host ""
-
-# Check for chafa
-$chafaPath = Get-Command chafa -ErrorAction SilentlyContinue
-if (!$chafaPath) {
-    Write-Host "  [Install chafa for image preview]" -ForegroundColor DarkGray
-    Write-Host "  scoop install chafa" -ForegroundColor DarkGray
-    exit
-}
-
-# Generate hash for cache filename
+# Generate hash for cache
 $bytes = [System.Text.Encoding]::UTF8.GetBytes($name)
 $md5 = [System.Security.Cryptography.MD5]::Create()
-$hashBytes = $md5.ComputeHash($bytes)
-$hash = [System.BitConverter]::ToString($hashBytes).Replace("-", "").Substring(0, 12).ToLower()
+$hash = [System.BitConverter]::ToString($md5.ComputeHash($bytes)).Replace("-", "").Substring(0, 12).ToLower()
 $imgPath = "$IMAGES\$hash.jpg"
+$infoPath = "$INFO_CACHE\$hash.json"
 
-# Fetch image if not cached
-if (!(Test-Path $imgPath)) {
+# ============================================================================
+# PART 1: IMAGE PREVIEW (using same settings as macOS version)
+# ============================================================================
+$hasChafa = Get-Command chafa -ErrorAction SilentlyContinue
+
+if ($hasChafa) {
+    # Fetch image if not cached
+    if (!(Test-Path $imgPath)) {
+        try {
+            $escapedName = $name -replace '"', '\"'
+            $imgQuery = @{
+                query = "query{Page(perPage:1){media(search:`"$escapedName`",type:ANIME){coverImage{extraLarge large}}}}"
+            } | ConvertTo-Json -Compress
+            
+            $imgResponse = Invoke-RestMethod "https://graphql.anilist.co" -Method Post -ContentType "application/json" -Body $imgQuery -TimeoutSec 5
+            $coverUrl = $imgResponse.data.Page.media[0].coverImage.extraLarge
+            if (!$coverUrl) { $coverUrl = $imgResponse.data.Page.media[0].coverImage.large }
+            
+            if ($coverUrl) {
+                Invoke-WebRequest $coverUrl -OutFile $imgPath -TimeoutSec 8 | Out-Null
+            }
+        } catch {}
+    }
+    
+    # Display image with SAME settings as macOS version
+    if (Test-Path $imgPath) {
+        Write-Host ""
+        # Using macOS-matching settings: --size=70x45 --symbols=all --colors=256
+        & chafa --size=60x35 --symbols=all --colors=256 $imgPath 2>$null
+        Write-Host ""
+    }
+}
+
+# ============================================================================
+# PART 2: COMPACT ANIME INFO
+# ============================================================================
+$info = $null
+if (Test-Path $infoPath) {
+    try { $info = Get-Content $infoPath -Raw | ConvertFrom-Json } catch {}
+}
+
+if (!$info) {
     try {
-        # Use extraLarge for best quality
         $escapedName = $name -replace '"', '\"'
-        $graphqlQuery = @{
-            query = "query{Page(perPage:1){media(search:`"$escapedName`",type:ANIME){coverImage{extraLarge large}}}}"
+        $query = @{
+            query = "query{Page(perPage:1){media(search:`"$escapedName`",type:ANIME){title{english romaji native}averageScore status episodes format season seasonYear genres studios(isMain:true){nodes{name}}}}}"
         } | ConvertTo-Json -Compress
         
-        $response = Invoke-RestMethod "https://graphql.anilist.co" -Method Post -ContentType "application/json" -Body $graphqlQuery -TimeoutSec 10
+        $response = Invoke-RestMethod "https://graphql.anilist.co" -Method Post -ContentType "application/json" -Body $query -TimeoutSec 5
+        $info = $response.data.Page.media[0]
         
-        # Try extraLarge first, fall back to large
-        $coverUrl = $response.data.Page.media[0].coverImage.extraLarge
-        if (!$coverUrl) { 
-            $coverUrl = $response.data.Page.media[0].coverImage.large 
+        if ($info) {
+            $info | ConvertTo-Json -Depth 10 | Out-File $infoPath -Encoding UTF8
         }
-        
-        if ($coverUrl) {
-            Invoke-WebRequest $coverUrl -OutFile $imgPath -TimeoutSec 15
-        }
-    } catch {
-        Write-Host "  Loading..." -ForegroundColor DarkGray
-        exit
+    } catch {}
+}
+
+# Show title if no image was displayed
+if (!$hasChafa -or !(Test-Path $imgPath)) {
+    Write-Host ""
+    Write-Host "  $name" -ForegroundColor Cyan
+    Write-Host "  ────────────────────────────────" -ForegroundColor DarkGray
+}
+
+if ($info) {
+    # Title (if image shown, show compact title)
+    $title = if ($info.title.english) { $info.title.english } else { $info.title.romaji }
+    
+    if ($hasChafa -and (Test-Path $imgPath)) {
+        Write-Host "  $title" -ForegroundColor Cyan
+    }
+    
+    # Score | Status | Episodes (one line)
+    $score = if ($info.averageScore) { "$($info.averageScore)%" } else { "N/A" }
+    $status = if ($info.status) { $info.status } else { "?" }
+    $eps = if ($info.episodes) { "$($info.episodes) eps" } else { "? eps" }
+    $scoreColor = if ($info.averageScore -ge 80) { "Green" } elseif ($info.averageScore -ge 60) { "Yellow" } else { "Gray" }
+    
+    Write-Host "  " -NoNewline
+    Write-Host "★ $score" -NoNewline -ForegroundColor $scoreColor
+    Write-Host " | " -NoNewline -ForegroundColor DarkGray
+    Write-Host "$status" -NoNewline -ForegroundColor Magenta
+    Write-Host " | " -NoNewline -ForegroundColor DarkGray
+    Write-Host "$eps" -ForegroundColor White
+    
+    # Format | Season | Studio (one line)
+    $format = if ($info.format) { $info.format } else { "" }
+    $season = if ($info.season -and $info.seasonYear) { "$($info.season) $($info.seasonYear)" } else { "" }
+    $studio = if ($info.studios.nodes -and $info.studios.nodes.Count -gt 0) { $info.studios.nodes[0].name } else { "" }
+    
+    $parts = @($format, $season, $studio) | Where-Object { $_ }
+    if ($parts.Count -gt 0) {
+        Write-Host "  $($parts -join ' • ')" -ForegroundColor Gray
+    }
+    
+    # Genres (one line)
+    if ($info.genres -and $info.genres.Count -gt 0) {
+        $genreList = ($info.genres | Select-Object -First 4) -join " • "
+        Write-Host "  $genreList" -ForegroundColor DarkYellow
+    }
+} else {
+    if (!$hasChafa) {
+        Write-Host "  [Install chafa: scoop install chafa]" -ForegroundColor DarkGray
     }
 }
 
-# Display image with chafa using SIXEL format (native Windows Terminal support)
-# Sixel provides true image quality, not ASCII art
-if (Test-Path $imgPath) {
-    # Try Sixel first (Windows Terminal 1.22+ supports this natively)
-    # --format=sixels gives true image rendering, not character-based approximation
-    # --size controls the output size in terminal cells
-    $output = & chafa --format=sixels --size=70x40 $imgPath 2>&1
-    
-    # If sixel output is empty or failed, fall back to symbols (for older terminals)
-    if (!$output -or $output -match "error|not supported") {
-        & chafa --format=symbols --symbols=block --colors=full --size=70x40 $imgPath 2>$null
-    } else {
-        Write-Output $output
-    }
-}
+Write-Host ""
 '@
     $previewScript | Out-File "$script:SCRIPTS\preview.ps1" -Encoding UTF8
     
