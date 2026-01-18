@@ -17,7 +17,7 @@ function Write-Err { Write-Host "  ERROR: $args" -ForegroundColor Red }
 
 Write-Host ""
 Write-Host "  ================================" -ForegroundColor Magenta
-Write-Host "     ani-tui Installer v6.3" -ForegroundColor White
+Write-Host "     ani-tui Installer v6.4" -ForegroundColor White
 Write-Host "  ================================" -ForegroundColor Magenta
 Write-Host ""
 

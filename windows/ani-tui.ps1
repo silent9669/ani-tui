@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    ani-tui v6.3 - Windows Entry Point
+    ani-tui v6.4 - Windows Entry Point
 .DESCRIPTION
     Simple wrapper that calls the core script.
 #>

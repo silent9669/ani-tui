@@ -1,11 +1,10 @@
 <#
 .SYNOPSIS
-    ani-tui v6.2 for Windows - Fixed Space Handling & Preview
+    ani-tui v6.4 for Windows - Fixed Preview and Playback
 .DESCRIPTION
-    Uses native batch/curl for fzf callbacks. Fixed issues with:
-    - Space characters in search queries
-    - Empty search showing history
-    - Image preview functionality
+    - Forces regeneration of helper scripts for preview fix
+    - Uses Git Bash for ani-cli playback (required by ani-cli)
+    - High quality image previews
 #>
 
 param(
@@ -19,7 +18,7 @@ $ErrorActionPreference = "SilentlyContinue"
 # =============================================================================
 # CONFIG
 # =============================================================================
-$script:VERSION = "6.3.0"
+$script:VERSION = "6.4.0"
 $script:DATA = "$env:USERPROFILE\.ani-tui"
 $script:CACHE = "$script:DATA\cache"
 $script:IMAGES = "$script:CACHE\images"
@@ -46,19 +45,19 @@ function Initialize {
         "[]" | Out-File $script:HISTORY -Encoding UTF8 
     }
     
+    # Always regenerate helper scripts to ensure latest version
     Create-HelperScripts
 }
 
 function Create-HelperScripts {
     # ==========================================================================
-    # SEARCH HELPER - Fixed space handling with proper quoting
+    # SEARCH HELPER
     # ==========================================================================
-    # Using PowerShell for search since batch has issues with special chars
     $searchScript = @'
 [CmdletBinding()]
-param([Parameter(ValueFromRemainingArguments)][string[]]$Args)
+param([Parameter(ValueFromRemainingArguments)][string[]]$QueryArgs)
 $ErrorActionPreference = "SilentlyContinue"
-$q = ($Args -join " ").Trim()
+$q = ($QueryArgs -join " ").Trim()
 $HIST = "$env:USERPROFILE\.ani-tui\history.json"
 
 # If query is empty or too short, show history
@@ -86,7 +85,6 @@ try {
 '@
     $searchScript | Out-File "$script:SCRIPTS\search.ps1" -Encoding UTF8
     
-    # Batch wrapper that calls PowerShell with proper quoting
     $searchCmd = @'
 @echo off
 powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0search.ps1" %*
@@ -121,13 +119,13 @@ powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0history.ps1"
     # ==========================================================================
     $deleteScript = @'
 [CmdletBinding()]
-param([Parameter(ValueFromRemainingArguments)][string[]]$Args)
+param([Parameter(ValueFromRemainingArguments)][string[]]$InputArgs)
 $ErrorActionPreference = "SilentlyContinue"
-$input = ($Args -join " ").Trim()
+$inputText = ($InputArgs -join " ").Trim()
 $HIST = "$env:USERPROFILE\.ani-tui\history.json"
 
 # Extract title (remove [xx] prefix)
-$title = $input -replace '^\[\d+\]\s*', ''
+$title = $inputText -replace '^\[\d+\]\s*', ''
 if (!$title) { exit }
 
 try {
@@ -145,20 +143,20 @@ powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0delete.ps1" %*
     $deleteCmd | Out-File "$script:SCRIPTS\delete.cmd" -Encoding ASCII
 
     # ==========================================================================
-    # PREVIEW HELPER - Fixed to properly fetch and display images
+    # PREVIEW HELPER - High quality image display
     # ==========================================================================
     $previewScript = @'
 [CmdletBinding()]
-param([Parameter(ValueFromRemainingArguments)][string[]]$Args)
+param([Parameter(ValueFromRemainingArguments)][string[]]$InputArgs)
 $ErrorActionPreference = "SilentlyContinue"
-$input = ($Args -join " ").Trim()
-if (!$input) { exit }
+$inputText = ($InputArgs -join " ").Trim()
+if (!$inputText) { exit }
 
 $IMAGES = "$env:USERPROFILE\.ani-tui\cache\images"
 if (!(Test-Path $IMAGES)) { New-Item -ItemType Directory -Path $IMAGES -Force | Out-Null }
 
-# Clean title
-$name = $input
+# Clean title - remove prefixes and suffixes
+$name = $inputText
 $name = $name -replace '^HIST\s*', ''
 $name = $name -replace '^\[\d+\]\s*', ''
 $name = $name -replace '\s*\(\d+\s+eps\)\s*$', ''
@@ -167,35 +165,45 @@ $name = $name.Trim()
 
 if (!$name) { exit }
 
-# Display title
+# Display title with nice formatting
 Write-Host ""
 Write-Host "  $name" -ForegroundColor Cyan
 Write-Host ""
 
 # Check for chafa
-$hasChafa = Get-Command chafa -ErrorAction SilentlyContinue
-if (!$hasChafa) {
+$chafaPath = Get-Command chafa -ErrorAction SilentlyContinue
+if (!$chafaPath) {
     Write-Host "  [Install chafa for image preview]" -ForegroundColor DarkGray
     Write-Host "  scoop install chafa" -ForegroundColor DarkGray
     exit
 }
 
-# Generate hash for cache
+# Generate hash for cache filename
 $bytes = [System.Text.Encoding]::UTF8.GetBytes($name)
-$hash = [System.BitConverter]::ToString(
-    [System.Security.Cryptography.MD5]::Create().ComputeHash($bytes)
-).Replace("-", "").Substring(0, 12).ToLower()
+$md5 = [System.Security.Cryptography.MD5]::Create()
+$hashBytes = $md5.ComputeHash($bytes)
+$hash = [System.BitConverter]::ToString($hashBytes).Replace("-", "").Substring(0, 12).ToLower()
 $imgPath = "$IMAGES\$hash.jpg"
 
-# Fetch image if not cached (use extraLarge for better quality)
+# Fetch image if not cached
 if (!(Test-Path $imgPath)) {
     try {
-        $query = @{ query = "query{Page(perPage:1){media(search:`"$name`",type:ANIME){coverImage{extraLarge large}}}}" } | ConvertTo-Json
-        $r = Invoke-RestMethod "https://graphql.anilist.co" -Method Post -ContentType "application/json" -Body $query -TimeoutSec 8
-        $coverUrl = $r.data.Page.media[0].coverImage.extraLarge
-        if (!$coverUrl) { $coverUrl = $r.data.Page.media[0].coverImage.large }
+        # Use extraLarge for best quality
+        $escapedName = $name -replace '"', '\"'
+        $graphqlQuery = @{
+            query = "query{Page(perPage:1){media(search:`"$escapedName`",type:ANIME){coverImage{extraLarge large}}}}"
+        } | ConvertTo-Json -Compress
+        
+        $response = Invoke-RestMethod "https://graphql.anilist.co" -Method Post -ContentType "application/json" -Body $graphqlQuery -TimeoutSec 10
+        
+        # Try extraLarge first, fall back to large
+        $coverUrl = $response.data.Page.media[0].coverImage.extraLarge
+        if (!$coverUrl) { 
+            $coverUrl = $response.data.Page.media[0].coverImage.large 
+        }
+        
         if ($coverUrl) {
-            Invoke-WebRequest $coverUrl -OutFile $imgPath -TimeoutSec 10
+            Invoke-WebRequest $coverUrl -OutFile $imgPath -TimeoutSec 15
         }
     } catch {
         Write-Host "  Loading..." -ForegroundColor DarkGray
@@ -203,9 +211,10 @@ if (!(Test-Path $imgPath)) {
     }
 }
 
-# Display image with high quality settings
+# Display image with chafa - high quality settings
 if (Test-Path $imgPath) {
-    & chafa --size=60x35 --symbols=all --colors=256 $imgPath 2>$null
+    # Use full color and larger size for better quality
+    & chafa --format=symbols --symbols=all --colors=full --size=55x30 $imgPath 2>$null
 }
 '@
     $previewScript | Out-File "$script:SCRIPTS\preview.ps1" -Encoding UTF8
@@ -310,6 +319,39 @@ function Get-Episodes($showId) {
     } catch {
         return @()
     }
+}
+
+# =============================================================================
+# FIND GIT BASH
+# =============================================================================
+function Find-GitBash {
+    # Check common Git Bash locations
+    $paths = @(
+        "$env:ProgramFiles\Git\bin\bash.exe",
+        "$env:ProgramFiles(x86)\Git\bin\bash.exe",
+        "$env:USERPROFILE\scoop\apps\git\current\bin\bash.exe",
+        "C:\Program Files\Git\bin\bash.exe",
+        "C:\Program Files (x86)\Git\bin\bash.exe"
+    )
+    
+    # Also check GIT_INSTALL_ROOT environment variable
+    if ($env:GIT_INSTALL_ROOT) {
+        $paths = @("$env:GIT_INSTALL_ROOT\bin\bash.exe") + $paths
+    }
+    
+    foreach ($path in $paths) {
+        if (Test-Path $path) {
+            return $path
+        }
+    }
+    
+    # Try to find via where command
+    $gitBash = Get-Command bash.exe -ErrorAction SilentlyContinue | Where-Object { $_.Source -notlike "*System32*" -and $_.Source -notlike "*WSL*" }
+    if ($gitBash) {
+        return $gitBash.Source
+    }
+    
+    return $null
 }
 
 # =============================================================================
@@ -441,20 +483,9 @@ function Start-TUI {
         Write-Host "  >> Now Playing: $title - Episode $episode" -ForegroundColor Green
         Write-Host ""
         
+        # Check for ani-cli
         $aniCli = Get-Command ani-cli -ErrorAction SilentlyContinue
-        if ($aniCli) {
-            Write-Host "  Running: ani-cli -S 1 -e $episode `"$title`"" -ForegroundColor DarkGray
-            Write-Host ""
-            
-            # Use cmd.exe /c to run ani-cli to avoid WSL issues
-            # This ensures it runs in native Windows mode
-            $cmdArgs = "ani-cli -S 1 -e $episode `"$title`""
-            Start-Process -FilePath "cmd.exe" -ArgumentList "/c", $cmdArgs -Wait -NoNewWindow
-            
-            Write-Host ""
-            Write-Host "  Playback ended." -ForegroundColor Cyan
-            Read-Host "  Press Enter to continue"
-        } else {
+        if (!$aniCli) {
             Write-Host "  ani-cli not found." -ForegroundColor Yellow
             Write-Host ""
             Write-Host "  Install streaming support:" -ForegroundColor Gray
@@ -464,7 +495,37 @@ function Start-TUI {
             Write-Host "  Episode saved to history." -ForegroundColor Cyan
             Write-Host ""
             Read-Host "  Press Enter to continue"
+            continue
         }
+        
+        # Find Git Bash - required for ani-cli on Windows
+        $gitBash = Find-GitBash
+        
+        if ($gitBash) {
+            # Run ani-cli through Git Bash (required for proper operation)
+            Write-Host "  Using Git Bash for ani-cli..." -ForegroundColor DarkGray
+            $escapedTitle = $title -replace "'", "'\''"
+            $bashCmd = "ani-cli -S 1 -e $episode '$escapedTitle'"
+            
+            Start-Process -FilePath $gitBash -ArgumentList "-c", "`"$bashCmd`"" -Wait -NoNewWindow
+        } else {
+            # Fallback: try direct execution (may have issues)
+            Write-Host "  Git Bash not found, trying direct execution..." -ForegroundColor Yellow
+            Write-Host "  (For best results, install Git for Windows: scoop install git)" -ForegroundColor DarkGray
+            Write-Host ""
+            
+            try {
+                & ani-cli -S 1 -e $episode $title
+            } catch {
+                Write-Host "  Error running ani-cli: $_" -ForegroundColor Red
+                Write-Host "  ani-cli requires Git Bash on Windows." -ForegroundColor Yellow
+                Write-Host "  Install: scoop install git" -ForegroundColor Yellow
+            }
+        }
+        
+        Write-Host ""
+        Write-Host "  Playback ended." -ForegroundColor Cyan
+        Read-Host "  Press Enter to continue"
     }
     
     Write-Host ""
@@ -490,7 +551,7 @@ switch ($Command.ToLower()) {
         Write-Host "    Esc       Back/Quit"
         Write-Host ""
         Write-Host "  Dependencies:"
-        Write-Host "    scoop install fzf chafa ani-cli mpv"
+        Write-Host "    scoop install git fzf chafa ani-cli mpv"
         Write-Host ""
     }
     "--help" { & $PSCommandPath -h }
