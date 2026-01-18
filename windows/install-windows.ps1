@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    ani-tui Windows Installer
+    ani-tui Windows Installer v6.0
 .DESCRIPTION
     Installs ani-tui and all dependencies for Windows.
 #>
@@ -17,7 +17,7 @@ function Write-Err { Write-Host "  ERROR: $args" -ForegroundColor Red }
 
 Write-Host ""
 Write-Host "  ================================" -ForegroundColor Magenta
-Write-Host "     ani-tui Installer v5.5" -ForegroundColor White
+Write-Host "     ani-tui Installer v6.0" -ForegroundColor White
 Write-Host "  ================================" -ForegroundColor Magenta
 Write-Host ""
 
@@ -43,7 +43,8 @@ try {
 Write-Step "Creating launcher"
 $launcher = @"
 @echo off
-powershell -NoProfile -NoLogo -ExecutionPolicy Bypass -File "%~dp0ani-tui.ps1" %*
+REM ani-tui v6.0 for Windows - Launcher
+powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0ani-tui-core.ps1" %*
 "@
 $launcher | Out-File "$BinDir\ani-tui.cmd" -Encoding ASCII
 Write-OK "Created ani-tui.cmd"
