@@ -7,77 +7,53 @@
 
 ## Features
 
-- 🔍 **Real-time fuzzy search** - Type to search anime instantly
-- 🖼️ **Cover image previews** - Beautiful anime covers in your terminal
-- ▶️ **Stream directly** - Play in mpv/iina without leaving the terminal
-- 📺 **Watch history** - Track your progress across anime
-- ⌨️ **Keyboard-driven** - Navigate entirely with keyboard shortcuts
+- 🔍 **Real-time search** - Type to search anime instantly
+- 🖼️ **Image previews** - Anime covers in your terminal (via chafa)
+- ▶️ **Stream directly** - Play in mpv without leaving terminal
+- 📺 **Watch history** - Track progress across anime
+- ⌨️ **Keyboard-driven** - Navigate with keyboard shortcuts
 
 ---
 
-## Installation
+## macOS Installation
 
-### macOS (Homebrew) — Recommended
+### Homebrew (Recommended)
 
 ```bash
-# Add the tap and install
 brew tap silent9669/tap
 brew install ani-tui
-
-# Install recommended dependencies for full experience
-brew install chafa mpv
+brew install chafa mpv  # for image previews and streaming
 ```
 
-That's it! Now run `ani-tui` from any terminal.
-
-### macOS (Manual)
+### Manual
 
 ```bash
-# 1. Install dependencies
 brew install curl jq fzf chafa mpv
-
-# 2. Clone the repository
 git clone https://github.com/silent9669/ani-tui.git ~/.local/share/ani-tui
-cd ~/.local/share/ani-tui
-
-# 3. Make executable and link
-chmod +x macos/ani-tui
+chmod +x ~/.local/share/ani-tui/macos/ani-tui
 ln -sf ~/.local/share/ani-tui/macos/ani-tui /usr/local/bin/ani-tui
-
-# 4. Run
-ani-tui
 ```
 
 ---
 
 ## Windows Installation
 
-### Quick Install (Recommended)
-
-Open **PowerShell** and run:
+### One-Line Install (PowerShell)
 
 ```powershell
-Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
-iex (irm https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/install-windows.ps1)
+Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force; iex (irm https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/install-windows.ps1)
 ```
 
-This will:
-- Install ani-tui and add to PATH
-- Install [Scoop](https://scoop.sh) if not present
-- Install all dependencies: `fzf`, `chafa`, `ani-cli`, `mpv`
+### Using curl (Command Prompt)
 
-**Restart your terminal**, then run:
-```powershell
-ani-tui
+```cmd
+curl -L -o "%TEMP%\install.ps1" https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/install-windows.ps1 && powershell -ExecutionPolicy Bypass -File "%TEMP%\install.ps1"
 ```
 
 ### Manual Install
 
-If you prefer manual installation:
-
 ```powershell
 # 1. Install Scoop (package manager)
-Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
 irm get.scoop.sh | iex
 
 # 2. Install dependencies
@@ -86,47 +62,42 @@ scoop install fzf chafa ani-cli mpv
 
 # 3. Download ani-tui
 mkdir "$env:USERPROFILE\.ani-tui\bin" -Force
-Invoke-WebRequest "https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/ani-tui.ps1" -OutFile "$env:USERPROFILE\.ani-tui\bin\ani-tui.ps1"
+irm https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/ani-tui.ps1 -OutFile "$env:USERPROFILE\.ani-tui\bin\ani-tui.ps1"
+irm https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/ani-tui-core.ps1 -OutFile "$env:USERPROFILE\.ani-tui\bin\ani-tui-core.ps1"
 
-# 4. Create launcher batch file
-'@echo off`npowershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0ani-tui.ps1" %*' | Out-File "$env:USERPROFILE\.ani-tui\bin\ani-tui.cmd" -Encoding ASCII
+# 4. Create launcher
+"@echo off`npowershell -NoProfile -ExecutionPolicy Bypass -File `"%~dp0ani-tui.ps1`" %*" | Out-File "$env:USERPROFILE\.ani-tui\bin\ani-tui.cmd" -Encoding ASCII
 
 # 5. Add to PATH
-$path = [Environment]::GetEnvironmentVariable("PATH", "User")
-[Environment]::SetEnvironmentVariable("PATH", "$path;$env:USERPROFILE\.ani-tui\bin", "User")
+$p = [Environment]::GetEnvironmentVariable("PATH","User")
+[Environment]::SetEnvironmentVariable("PATH","$p;$env:USERPROFILE\.ani-tui\bin","User")
 
-# 6. Restart terminal and run
+# 6. Restart terminal, then run:
 ani-tui
 ```
 
 ### Windows Dependencies
 
 | Package | Purpose | Required | Install |
-|---------|---------|----------|---------|
-| fzf | Fuzzy finder TUI | ✅ Yes | `scoop install fzf` |
-| chafa | Image previews | Optional | `scoop install chafa` |
-| ani-cli | Streaming | Optional | `scoop install ani-cli` |
-| mpv | Video player | Optional | `scoop install mpv` |
+|---------|---------|:--------:|---------|
+| fzf | Fuzzy finder UI | ✅ | `scoop install fzf` |
+| chafa | Image previews | ⭐ | `scoop install chafa` |
+| ani-cli | Video streaming | ⭐ | `scoop install ani-cli` |
+| mpv | Video player | ⭐ | `scoop install mpv` |
 
-**Install all at once:**
 ```powershell
+# Install all at once
 scoop bucket add extras
 scoop install fzf chafa ani-cli mpv
 ```
 
-### Windows Troubleshooting
+### Troubleshooting
 
-**Clean Reinstall:**
+**Clean reinstall:**
 ```powershell
 Remove-Item "$env:USERPROFILE\.ani-tui" -Recurse -Force -ErrorAction SilentlyContinue
 iex (irm https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/install-windows.ps1)
 ```
-
-**Common Issues:**
-- **"fzf not found"** → Run: `scoop install fzf`
-- **"ani-cli not found"** → Run: `scoop bucket add extras; scoop install ani-cli mpv`
-- **No image previews** → Run: `scoop install chafa`
-- **Script won't run** → Run: `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force`
 
 ---
 
@@ -136,54 +107,31 @@ iex (irm https://raw.githubusercontent.com/silent9669/ani-tui/master/windows/ins
 ani-tui
 ```
 
-### Keyboard Shortcuts
+### Controls
 
 | Key | Action |
 |-----|--------|
-| Type | Search anime in real-time |
-| ↑ / ↓ | Navigate list |
-| Enter | Select anime / Play episode |
-| Ctrl-D | Delete from watch history |
-| Esc | Go back / Quit |
+| Type | Search anime (real-time) |
+| ↑ / ↓ | Navigate |
+| Enter | Select / Play |
+| Ctrl-D | Delete from history |
+| Esc | Back / Quit |
 
 ### Workflow
 
-1. **Start** → Shows your watch history
-2. **Type** → Search for new anime
-3. **Select** → Pick an anime
-4. **Choose episode** → Starts streaming in mpv
-
----
-
-## Dependencies
-
-### macOS
-
-| Package | Purpose | Install |
-|---------|---------|---------|
-| curl | API requests | `brew install curl` |
-| jq | JSON parsing | `brew install jq` |
-| fzf | Fuzzy finder UI | `brew install fzf` |
-| chafa | Image previews | `brew install chafa` |
-| mpv | Video playback | `brew install mpv` |
-
-**Install all:**
-```bash
-brew install curl jq fzf chafa mpv
-```
-
-### Windows
-
-See [Windows Dependencies](#windows-dependencies) above.
+1. Launch `ani-tui`
+2. Type to search or select from history
+3. Pick an anime
+4. Choose episode
+5. Watch in mpv
 
 ---
 
 ## Data Locations
 
-| Type | macOS | Windows |
-|------|-------|---------|
+| | macOS | Windows |
+|---|-------|---------|
 | Cache | `~/.cache/ani-tui/` | `%USERPROFILE%\.ani-tui\cache\` |
-| Images | `~/.cache/ani-tui/images/` | `%USERPROFILE%\.ani-tui\cache\images\` |
 | History | `~/.local/share/ani-tui/history.json` | `%USERPROFILE%\.ani-tui\history.json` |
 
 ---
@@ -192,24 +140,14 @@ See [Windows Dependencies](#windows-dependencies) above.
 
 ### macOS
 ```bash
-# Homebrew
-brew uninstall ani-tui
-brew untap silent9669/tap
-
-# Manual
-rm -rf ~/.local/share/ani-tui
-rm -rf ~/.cache/ani-tui
-rm /usr/local/bin/ani-tui
+brew uninstall ani-tui && brew untap silent9669/tap
+rm -rf ~/.cache/ani-tui ~/.local/share/ani-tui
 ```
 
 ### Windows
 ```powershell
-# Remove ani-tui
 Remove-Item "$env:USERPROFILE\.ani-tui" -Recurse -Force
-
-# Optional: Remove from PATH manually in System Settings
-# Optional: Uninstall deps
-scoop uninstall ani-cli mpv chafa fzf
+# Remove from PATH manually in System Settings
 ```
 
 ---
