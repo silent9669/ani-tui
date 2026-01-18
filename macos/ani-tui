@@ -6,8 +6,14 @@
 
 VERSION="5.1.0"
 
-# Paths
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Paths - resolve symlinks for Homebrew installs
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [[ -L "$SCRIPT_PATH" ]]; do
+    SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+    SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+    [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 BREW_LIBEXEC="$(dirname "$SCRIPT_DIR")/libexec"
 CACHE="${HOME}/.cache/ani-tui"
 IMAGES="${CACHE}/images"
