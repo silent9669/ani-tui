@@ -21,7 +21,7 @@ jobs:
     - uses: actions/checkout@v4
     
     - name: Install Rust
-      uses: dtolnay/rust-action@stable
+      uses: dtolnay/rust-toolchain@stable
       with:
         targets: ${{ matrix.target }}
     
@@ -45,7 +45,7 @@ jobs:
     - uses: actions/checkout@v4
     
     - name: Install Rust
-      uses: dtolnay/rust-action@stable
+      uses: dtolnay/rust-toolchain@stable
     
     - name: Build
       run: cargo build --release
@@ -67,7 +67,7 @@ jobs:
     - uses: actions/checkout@v4
     
     - name: Install Rust
-      uses: dtolnay/rust-action@stable
+      uses: dtolnay/rust-toolchain@stable
     
     - name: Install dependencies
       run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
@@ -103,7 +103,7 @@ jobs:
         cd artifacts
         for dir in */; do
           cd "$dir"
-          sha256sum * > SHA256SUMS
+          sha256sum * > SHA256SUMS 2>/dev/null || true
           cd ..
         done
     
@@ -121,7 +121,7 @@ jobs:
           curl -fsSL https://raw.githubusercontent.com/silent9669/ani-tui/main/packaging/macos/install.sh | bash
           
           # Or using Homebrew
-          brew tap silent9669/ani-tui
+          brew tap silent9669/tap
           brew install ani-tui
           ```
           
@@ -146,3 +146,62 @@ jobs:
         prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-homebrew:
+    needs: release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+    - name: Checkout homebrew-tap
+      uses: actions/checkout@v4
+      with:
+        repository: silent9669/homebrew-tap
+        token: ${{ secrets.TAP_TOKEN }}
+        path: homebrew-tap
+    
+    - name: Download macOS artifact for SHA256
+      uses: actions/download-artifact@v4
+      with:
+        name: ani-tui-x86_64-apple-darwin
+        path: macos-artifact
+    
+    - name: Calculate SHA256
+      id: sha
+      run: |
+        SHA256=$(sha256sum macos-artifact/ani-tui-x86_64-apple-darwin.zip | awk '{print $1}')
+        echo "sha256=$SHA256" >> $GITHUB_OUTPUT
+    
+    - name: Update Homebrew formula
+      run: |
+        VERSION=${GITHUB_REF#refs/tags/v}
+        cat > homebrew-tap/Formula/ani-tui.rb << EOF
+        class AniTui < Formula
+          desc "A Netflix-inspired TUI for anime streaming"
+          homepage "https://github.com/silent9669/ani-tui"
+          url "https://github.com/silent9669/ani-tui/archive/refs/tags/v${VERSION}.tar.gz"
+          sha256 "${{ steps.sha.outputs.sha256 }}"
+          license "MIT"
+          head "https://github.com/silent9669/ani-tui.git", branch: "main"
+
+          depends_on "rust" => :build
+          depends_on "chafa"
+          depends_on "mpv"
+
+          def install
+            system "cargo", "install", *std_cargo_args
+          end
+
+          test do
+            system "#{bin}/ani-tui", "--version"
+          end
+        end
+        EOF
+    
+    - name: Commit and push
+      run: |
+        cd homebrew-tap
+        git config user.name "GitHub Actions"
+        git config user.email "actions@github.com"
+        git add Formula/ani-tui.rb
+        git commit -m "Update ani-tui to ${GITHUB_REF#refs/tags/}"
+        git push
