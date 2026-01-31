@@ -165,33 +165,9 @@ jobs:
     - name: Update Homebrew formula
       run: |
         VERSION=${GITHUB_REF#refs/tags/v}
+        SHA256=${{ steps.sha.outputs.sha256 }}
         mkdir -p homebrew-tap/Formula
-        cat > homebrew-tap/Formula/ani-tui.rb << 'RUBY'
-        class AniTui < Formula
-          desc "A Netflix-inspired TUI for anime streaming"
-          homepage "https://github.com/silent9669/ani-tui"
-          url "https://github.com/silent9669/ani-tui/archive/refs/tags/v'${VERSION}'.tar.gz"
-          sha256 "${{ steps.sha.outputs.sha256 }}"
-          license "MIT"
-          head "https://github.com/silent9669/ani-tui.git", branch: "main"
-
-          depends_on "rust" => :build
-          depends_on "chafa"
-          depends_on "mpv"
-
-          on_macos do
-            depends_on macos: :sonoma
-          end
-
-          def install
-            system "cargo", "install", *std_cargo_args
-          end
-
-          test do
-            system "#{bin}/ani-tui", "--version"
-          end
-        end
-        RUBY
+        printf '%s\n' "class AniTui < Formula" "  desc \"A Netflix-inspired TUI for anime streaming\"" "  homepage \"https://github.com/silent9669/ani-tui\"" "  url \"https://github.com/silent9669/ani-tui/archive/refs/tags/v${VERSION}.tar.gz\"" "  sha256 \"${SHA256}\"" "  license \"MIT\"" "  head \"https://github.com/silent9669/ani-tui.git\", branch: \"main\"" "" "  depends_on \"rust\" => :build" "  depends_on \"chafa\"" "  depends_on \"mpv\"" "" "  def install" "    system \"cargo\", \"install\", *std_cargo_args" "  end" "" "  test do" "    system \"#{bin}/ani-tui\", \"--version\"" "  end" "end" > homebrew-tap/Formula/ani-tui.rb
     
     - name: Commit and push to homebrew-tap
       run: |
