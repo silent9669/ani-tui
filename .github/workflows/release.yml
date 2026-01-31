@@ -156,24 +156,24 @@ jobs:
       uses: actions/checkout@v4
       with:
         repository: silent9669/homebrew-tap
-        token: ${{ secrets.TAP_TOKEN }}
+        token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         path: homebrew-tap
     
-    - name: Download macOS artifact for SHA256
-      uses: actions/download-artifact@v4
-      with:
-        name: ani-tui-x86_64-apple-darwin
-        path: macos-artifact
+    - name: Download source archive
+      run: |
+        VERSION=${GITHUB_REF#refs/tags/}
+        curl -L -o ani-tui-source.tar.gz "https://github.com/silent9669/ani-tui/archive/refs/tags/${VERSION}.tar.gz"
     
     - name: Calculate SHA256
       id: sha
       run: |
-        SHA256=$(sha256sum macos-artifact/ani-tui-x86_64-apple-darwin.zip | awk '{print $1}')
+        SHA256=$(sha256sum ani-tui-source.tar.gz | awk '{print $1}')
         echo "sha256=$SHA256" >> $GITHUB_OUTPUT
     
     - name: Update Homebrew formula
       run: |
         VERSION=${GITHUB_REF#refs/tags/v}
+        mkdir -p homebrew-tap/Formula
         cat > homebrew-tap/Formula/ani-tui.rb << EOF
         class AniTui < Formula
           desc "A Netflix-inspired TUI for anime streaming"
@@ -197,11 +197,11 @@ jobs:
         end
         EOF
     
-    - name: Commit and push
+    - name: Commit and push to homebrew-tap
       run: |
         cd homebrew-tap
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
         git add Formula/ani-tui.rb
-        git commit -m "Update ani-tui to ${GITHUB_REF#refs/tags/}"
+        git diff --staged --quiet || git commit -m "Update ani-tui to ${GITHUB_REF#refs/tags/}"
         git push
