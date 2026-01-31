@@ -98,20 +98,12 @@ jobs:
       with:
         path: artifacts
     
-    - name: Generate checksums
-      run: |
-        cd artifacts
-        for dir in */; do
-          cd "$dir"
-          sha256sum * > SHA256SUMS 2>/dev/null || true
-          cd ..
-        done
-    
     - name: Create Release
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          artifacts/**/*
+          artifacts/**/*.zip
+          artifacts/**/*.tar.gz
         body: |
           ## Installation
           
