@@ -1,0 +1,148 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        target:
+          - x86_64-apple-darwin
+          - aarch64-apple-darwin
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust
+      uses: dtolnay/rust-action@stable
+      with:
+        targets: ${{ matrix.target }}
+    
+    - name: Build
+      run: cargo build --release --target ${{ matrix.target }}
+    
+    - name: Package
+      run: |
+        cd target/${{ matrix.target }}/release
+        zip ani-tui-${{ matrix.target }}.zip ani-tui
+    
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ani-tui-${{ matrix.target }}
+        path: target/${{ matrix.target }}/release/ani-tui-${{ matrix.target }}.zip
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust
+      uses: dtolnay/rust-action@stable
+    
+    - name: Build
+      run: cargo build --release
+    
+    - name: Package
+      run: |
+        cd target/release
+        Compress-Archive -Path ani-tui.exe -DestinationPath ani-tui-windows-x86_64.zip
+    
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ani-tui-windows-x86_64
+        path: target/release/ani-tui-windows-x86_64.zip
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust
+      uses: dtolnay/rust-action@stable
+    
+    - name: Install dependencies
+      run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+    
+    - name: Build
+      run: cargo build --release
+    
+    - name: Package
+      run: |
+        cd target/release
+        tar -czf ani-tui-linux-x86_64.tar.gz ani-tui
+    
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ani-tui-linux-x86_64
+        path: target/release/ani-tui-linux-x86_64.tar.gz
+
+  release:
+    needs: [build-macos, build-windows, build-linux]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Download artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+    
+    - name: Generate checksums
+      run: |
+        cd artifacts
+        for dir in */; do
+          cd "$dir"
+          sha256sum * > SHA256SUMS
+          cd ..
+        done
+    
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          artifacts/**/*
+        body: |
+          ## Installation
+          
+          ### macOS
+          ```bash
+          # Using install script
+          curl -fsSL https://raw.githubusercontent.com/silent9669/ani-tui/main/packaging/macos/install.sh | bash
+          
+          # Or using Homebrew
+          brew tap silent9669/ani-tui
+          brew install ani-tui
+          ```
+          
+          ### Windows
+          ```powershell
+          # Using PowerShell
+          iwr -useb https://raw.githubusercontent.com/silent9669/ani-tui/main/packaging/windows/install.ps1 | iex
+          
+          # Or using Scoop
+          scoop bucket add ani-tui https://github.com/silent9669/ani-tui
+          scoop install ani-tui
+          ```
+          
+          ### Linux
+          ```bash
+          curl -fsSL https://raw.githubusercontent.com/silent9669/ani-tui/main/packaging/linux/install.sh | bash
+          ```
+          
+          ## What's New
+          See [CHANGELOG.md](https://github.com/silent9669/ani-tui/blob/main/CHANGELOG.md) for details.
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

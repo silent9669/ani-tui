@@ -1,0 +1,44 @@
+{
+    "version": "3.0.0",
+    "description": "A Netflix-inspired TUI for anime streaming",
+    "homepage": "https://github.com/silent9669/ani-tui",
+    "license": "MIT",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/silent9669/ani-tui/releases/download/v0.2.0/ani-tui-windows-x86_64.zip",
+            "hash": "PLACEHOLDER_SHA256"
+        }
+    },
+    "bin": "ani-tui.exe",
+    "depends": [
+        "chafa",
+        "mpv"
+    ],
+    "suggest": {
+        "scoop-completion": [
+            "scoop-completion"
+        ]
+    },
+    "notes": [
+        "ani-tui has been installed!",
+        "",
+        "Usage:",
+        "  ani-tui              # Start the app",
+        "  ani-tui -q 'naruto'  # Search immediately",
+        "",
+        "Run 'ani-tui --help' for more options."
+    ],
+    "checkver": {
+        "github": "https://github.com/silent9669/ani-tui"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/silent9669/ani-tui/releases/download/v$version/ani-tui-windows-x86_64.zip",
+                "hash": {
+                    "url": "$url.sha256"
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,54 @@
+# ani-tui configuration file
+# Place this file at:
+#   macOS: ~/Library/Application Support/ani-tui/config.toml
+#   Windows: %APPDATA%\ani-tui\config.toml
+#   Linux: ~/.config/ani-tui/config.toml
+
+[player]
+# Default media player: "mpv" or "iina" (macOS only)
+default = "mpv"
+
+# Preferred quality: "1080p", "720p", "480p", or leave empty for best available
+# quality = "1080p"
+
+# Disable subtitles by default
+# no_subs = false
+
+[ui]
+# Enable image preview in terminal (requires chafa)
+image_preview = true
+
+# Theme: "dark" or "light"
+theme = "dark"
+
+[sources]
+# Enable AllAnime source (English subtitles)
+allanime = true
+
+# Enable Gogoanime source (English subtitles - currently disabled by default)
+gogoanime = false
+
+# Enable Vietnamese source (KKPhim)
+vietnamese = true
+
+# Prowlarr configuration (optional, for advanced users)
+# [prowlarr]
+# url = "http://localhost:9696"
+# api_key = "your-api-key-here"
+# indexer = 1
+
+[cache]
+# Metadata cache TTL in days (AniList data)
+metadata_ttl_days = 7
+
+# Maximum image cache size in MB
+image_cache_size_mb = 100
+
+# Maximum images in memory cache
+memory_cache_size = 50
+
+[keybindings]
+# Custom keybindings (optional)
+# search = "S"
+# toggle_sources = "C"
+# quit = "q"

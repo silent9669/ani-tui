@@ -1,0 +1,1268 @@
+use crate::config::Config;
+use crate::db::Database;
+use crate::image::{ChafaRenderer, ImagePipeline};
+use crate::metadata::{EnrichedAnime, MetadataCache};
+use crate::player::Player;
+use crate::providers::{AnimeProvider, Episode, Language, ProviderRegistry};
+use crate::ui::components::{LoadingSpinner, Toast};
+use crate::ui::modern_components::{PreviewPanel, SearchOverlay, SourceSelectModal, SplashScreen};
+use crate::ui::player_controller::{ControlAction, PlayerController, PlayerState};
+use anyhow::Result;
+use crossterm::{
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span, Text},
+    widgets::{Block, Borders, Clear, ListState, Paragraph},
+    Frame, Terminal,
+};
+use std::io;
+use std::sync::Arc;
+use std::time::Instant;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Screen {
+    Splash,
+    SourceSelect,
+    Home,
+    Search,
+    EpisodeSelect,
+    Player,
+}
+
+#[allow(dead_code)]
+pub struct App {
+    config: Config,
+    db: Arc<Database>,
+    providers: ProviderRegistry,
+    #[allow(dead_code)]
+    player: Player,
+    current_screen: Screen,
+    should_quit: bool,
+
+    // New components
+    splash_screen: SplashScreen,
+    splash_start: Instant,
+    metadata_cache: MetadataCache,
+    image_pipeline: ImagePipeline,
+    player_controller: PlayerController,
+    #[allow(dead_code)]
+    chafa_renderer: ChafaRenderer,
+
+    // Source selection - only one source at a time
+    selected_source: Language,
+    selected_source_idx: usize,
+    show_source_modal: bool,
+
+    // Search state
+    search_overlay: SearchOverlay,
+    enriched_results: Vec<EnrichedAnime>,
+
+    // Navigation
+    selected_index: usize,
+
+    // Selected anime and episodes
+    selected_anime: Option<EnrichedAnime>,
+    episodes: Vec<Episode>,
+    #[allow(dead_code)]
+    episode_list_state: ListState,
+
+    // Continue watching
+    continue_watching: Vec<crate::db::WatchHistory>,
+    continue_watching_selected: usize,
+
+    // UI Components
+    loading_spinner: LoadingSpinner,
+    toast: Option<Toast>,
+
+    // Image cache for current preview
+    current_image_data: Option<Vec<u8>>,
+
+    // Episode list modal in player
+    show_episode_list: bool,
+    episode_list_scroll: usize,
+
+    // Search debounce
+    search_pending: bool,
+    #[allow(dead_code)]
+    last_keypress: Instant,
+}
+
+impl App {
+    pub async fn new(config: Config, db: Arc<Database>) -> Result<Self> {
+        let providers = ProviderRegistry::new(&config);
+        let player = Player::new();
+
+        // Load continue watching - use a direct reference without Mutex since Database has internal locking
+        let continue_watching = db.get_continue_watching(10).await.unwrap_or_default();
+
+        // Setup selected source - only one at a time
+        let selected_source_idx = if config.sources.vietnamese { 1 } else { 0 };
+        let selected_source = if config.sources.vietnamese {
+            Language::Vietnamese
+        } else {
+            Language::English
+        };
+
+        // Database already has internal locking
+        let metadata_cache = MetadataCache::new(db.clone());
+        let image_pipeline = ImagePipeline::new(db.clone());
+
+        // Check if chafa is available
+        if !ChafaRenderer::is_available() {
+            eprintln!("Warning: chafa is not installed. Image previews will not work.");
+            eprintln!("Install chafa:");
+            eprintln!("  macOS: brew install chafa");
+            eprintln!("  Windows: scoop install chafa");
+        }
+
+        Ok(Self {
+            config,
+            db,
+            providers,
+            player,
+            current_screen: Screen::Splash,
+            should_quit: false,
+            splash_screen: SplashScreen::new(),
+            splash_start: Instant::now(),
+            metadata_cache,
+            image_pipeline,
+            player_controller: PlayerController::new(),
+            chafa_renderer: ChafaRenderer::new(),
+            selected_source,
+            selected_source_idx,
+            show_source_modal: false,
+            search_overlay: SearchOverlay::new(),
+            enriched_results: Vec::new(),
+            selected_index: 0,
+            selected_anime: None,
+            episodes: Vec::new(),
+            episode_list_state: ListState::default(),
+            continue_watching,
+            continue_watching_selected: 0,
+            loading_spinner: LoadingSpinner::new(),
+            toast: None,
+            current_image_data: None,
+            show_episode_list: false,
+            episode_list_scroll: 0,
+            search_pending: false,
+            last_keypress: Instant::now(),
+        })
+    }
+
+    pub fn set_initial_search(&mut self, query: String) {
+        self.search_overlay.query = query;
+        self.current_screen = Screen::Search;
+    }
+
+    pub async fn run(&mut self) -> Result<()> {
+        enable_raw_mode()?;
+        let mut stdout = io::stdout();
+        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+        let backend = CrosstermBackend::new(stdout);
+        let mut terminal = Terminal::new(backend)?;
+
+        let res = self.run_app(&mut terminal).await;
+
+        disable_raw_mode()?;
+        execute!(
+            terminal.backend_mut(),
+            LeaveAlternateScreen,
+            DisableMouseCapture
+        )?;
+        terminal.show_cursor()?;
+
+        res
+    }
+
+    async fn run_app(
+        &mut self,
+        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    ) -> Result<()> {
+        let mut last_tick = Instant::now();
+        let tick_rate = std::time::Duration::from_millis(100);
+
+        loop {
+            terminal.draw(|f| self.draw(f))?;
+
+            let timeout = tick_rate
+                .checked_sub(last_tick.elapsed())
+                .unwrap_or_else(|| std::time::Duration::from_secs(0));
+
+            if event::poll(timeout)? {
+                if let Event::Key(key) = event::read()? {
+                    if key.kind == KeyEventKind::Press {
+                        // Handle Shift+S for search
+                        if key.code == KeyCode::Char('S') {
+                            if self.current_screen == Screen::Home {
+                                self.current_screen = Screen::Search;
+                                continue;
+                            }
+                        }
+                        
+                        // Handle Shift+C for source toggle during search
+                        if key.code == KeyCode::Char('C') {
+                            if self.current_screen == Screen::Search {
+                                self.show_source_modal = !self.show_source_modal;
+                                continue;
+                            }
+                        }
+
+                        self.handle_key(key.code).await?;
+                    }
+                }
+            }
+
+            if last_tick.elapsed() >= tick_rate {
+                self.on_tick().await?;
+                last_tick = Instant::now();
+            }
+
+            if self.should_quit {
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn draw(&mut self, frame: &mut Frame) {
+        match self.current_screen {
+            Screen::Splash => self.draw_splash(frame),
+            Screen::SourceSelect => self.draw_source_select(frame),
+            Screen::Home => self.draw_home(frame),
+            Screen::Search => self.draw_search(frame),
+            Screen::EpisodeSelect => self.draw_episode_select(frame),
+            Screen::Player => self.draw_player(frame),
+        }
+
+        // Draw source modal if active
+        if self.show_source_modal {
+            self.draw_source_modal(frame);
+        }
+
+        // Draw toast if present
+        if let Some(ref toast) = self.toast {
+            self.draw_toast(frame, toast);
+        }
+    }
+
+    fn draw_splash(&mut self, frame: &mut Frame) {
+        let area = frame.size();
+        self.splash_screen.render(frame, area);
+    }
+
+    fn draw_source_select(&mut self, frame: &mut Frame) {
+        let area = frame.size();
+
+        let sources: Vec<(String, Language, bool)> = vec![
+            ("AllAnime".to_string(), Language::English, self.selected_source == Language::English),
+            ("KKPhim".to_string(), Language::Vietnamese, self.selected_source == Language::Vietnamese),
+        ];
+
+        SourceSelectModal::render(frame, area, &sources, self.selected_source_idx);
+    }
+
+    fn draw_home(&mut self, frame: &mut Frame) {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .margin(1)
+            .constraints([Constraint::Length(5), Constraint::Min(0)])
+            .split(frame.size());
+
+        // Welcome header
+        let welcome_text = Text::from(vec![
+            Line::from(vec![Span::styled(
+                "Welcome to ani-tui!\n",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )]),
+        ]);
+
+        let welcome = Paragraph::new(welcome_text)
+            .alignment(Alignment::Center)
+            .block(Block::default().borders(Borders::BOTTOM));
+
+        frame.render_widget(welcome, chunks[0]);
+
+        // Continue watching section
+        if !self.continue_watching.is_empty() {
+            self.draw_continue_watching(frame, chunks[1]);
+        } else {
+            let no_history = Paragraph::new("No watch history yet.\nStart watching to see your progress here!")
+                .alignment(Alignment::Center)
+                .block(Block::default().borders(Borders::ALL).title("Continue Watching"));
+            frame.render_widget(no_history, chunks[1]);
+        }
+    }
+
+    fn draw_continue_watching(&self,
+        frame: &mut Frame,
+        area: Rect,
+    ) {
+        let mut history_lines: Vec<Line> = vec![Line::from(vec![Span::styled(
+            "Continue Watching\n",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )])];
+
+        for (idx, history) in self.continue_watching.iter().take(5).enumerate() {
+            let is_selected = idx == self.continue_watching_selected;
+            
+            let prefix = if is_selected { "▶ " } else { "  " };
+            let title_style = if is_selected {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().add_modifier(Modifier::BOLD)
+            };
+
+            history_lines.push(Line::from(vec![
+                Span::raw(prefix),
+                Span::styled(&history.title, title_style),
+                Span::raw(format!(" - Episode {}", history.episode_number)),
+            ]));
+        }
+
+        let history_widget = Paragraph::new(Text::from(history_lines))
+            .block(Block::default().borders(Borders::ALL).title("Continue Watching"));
+
+        frame.render_widget(history_widget, area);
+    }
+
+    fn draw_search(&mut self, frame: &mut Frame) {
+        let area = frame.size();
+
+        // Split into search results and preview
+        let main_layout = Layout::default()
+            .direction(Direction::Horizontal)
+            .margin(1)
+            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .split(area);
+
+        // Draw search overlay in left panel
+        self.search_overlay.results = self.enriched_results.clone();
+        self.search_overlay.selected_index = self.selected_index;
+        self.search_overlay.is_searching = self.search_overlay.query.len() >= 2 && self.enriched_results.is_empty();
+        self.search_overlay.render(frame, main_layout[0], &[self.selected_source]);
+
+        // Draw preview panel in right panel
+        let selected_anime = self.enriched_results.get(self.selected_index);
+        let image_data = self.current_image_data.as_ref().map(|d| std::slice::from_ref(d));
+        PreviewPanel::render(frame, main_layout[1], selected_anime, image_data);
+    }
+
+    fn draw_episode_select(&mut self, frame: &mut Frame) {
+        let area = frame.size();
+
+        // Get anime title
+        let title = self.selected_anime.as_ref()
+            .map(|a| a.base.title.clone())
+            .unwrap_or_else(|| "Select Episode".to_string());
+
+        // Split area into info (top) and episodes (bottom)
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .margin(1)
+            .constraints([
+                Constraint::Length(3),  // Header
+                Constraint::Min(0),     // Episodes list
+            ])
+            .split(area);
+
+        // Header with anime title
+        let header = Paragraph::new(format!("{} - Select Episode to Watch", title))
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+            .block(Block::default().borders(Borders::BOTTOM));
+        frame.render_widget(header, chunks[0]);
+
+        // Episodes list
+        let mut lines: Vec<Line> = Vec::new();
+        
+        for (idx, episode) in self.episodes.iter().enumerate() {
+            let is_selected = idx == self.episode_list_scroll;
+            
+            let prefix = if is_selected { "▶ " } else { "  " };
+            let ep_title = episode.title.as_ref()
+                .map(|t| t.clone())
+                .unwrap_or_else(|| format!("Episode {}", episode.number));
+            
+            let style = if is_selected {
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
+            // Display episode title or "Episode X" if no title
+            let display_text = if ep_title.starts_with("Episode ") {
+                ep_title.to_string()
+            } else {
+                format!("Episode {}: {}", episode.number, ep_title)
+            };
+            
+            lines.push(Line::from(vec![
+                Span::raw(prefix),
+                Span::styled(display_text, style),
+            ]));
+        }
+
+        if self.episodes.is_empty() {
+            lines.push(Line::from("No episodes available"));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from("↑/↓: Navigate | Enter: Play | Esc: Back"));
+
+        let episodes_widget = Paragraph::new(Text::from(lines))
+            .block(Block::default().borders(Borders::ALL).title(format!("Episodes ({})", self.episodes.len())));
+        frame.render_widget(episodes_widget, chunks[1]);
+    }
+
+    fn draw_player(&mut self, frame: &mut Frame) {
+        match self.player_controller.state() {
+            PlayerState::Playing | PlayerState::ControlsVisible => {
+                self.draw_player_with_controls(frame);
+            }
+            PlayerState::Ended => {
+                self.draw_end_screen(frame);
+            }
+        }
+    }
+
+    fn draw_player_with_controls(&mut self, frame: &mut Frame) {
+        let area = frame.size();
+
+        // Show control overlay if visible
+        if self.player_controller.state() == PlayerState::ControlsVisible {
+            self.draw_control_overlay(frame, area);
+        } else {
+            // Show minimal indicator that player is active
+            let paragraph = Paragraph::new("Video playing... Press any key for controls")
+                .alignment(Alignment::Center)
+                .block(Block::default().borders(Borders::ALL).title("Player"));
+            frame.render_widget(paragraph, area);
+        }
+
+        // Episode list modal
+        if self.show_episode_list {
+            self.draw_episode_list_modal(frame);
+        }
+    }
+
+    fn draw_control_overlay(&self, frame: &mut Frame, area: Rect) {
+        let controls = vec![
+            ("Next Episode", "n", self.player_controller.has_next_episode()),
+            ("Previous Episode", "p", self.player_controller.has_previous_episode()),
+            ("Choose Episode", "e", true),
+            ("Download", "d", false), // TODO: implement download
+            ("Back to Menu", "b", true),
+        ];
+
+        let mut lines: Vec<Line> = vec![
+            Line::from(vec![
+                Span::styled(
+                    format!("{} - Episode {}/{}",
+                        self.player_controller.anime_title().unwrap_or("Unknown"),
+                        self.player_controller.episode_number(),
+                        self.player_controller.total_episodes()
+                    ),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(""),
+        ];
+
+        for (idx, (label, key, enabled)) in controls.iter().enumerate() {
+            let is_selected = idx == self.player_controller.selected_control();
+            
+            let style = if !enabled {
+                Style::default().fg(Color::DarkGray)
+            } else if is_selected {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
+            let prefix = if is_selected { "▶ " } else { "  " };
+
+            lines.push(Line::from(vec![
+                Span::styled(format!("{}[{}] ", prefix, key), style),
+                Span::styled(*label, style),
+            ]));
+        }
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title("Controls (auto-hide in 5s)");
+
+        let paragraph = Paragraph::new(Text::from(lines))
+            .block(block)
+            .alignment(Alignment::Center);
+
+        frame.render_widget(paragraph, area);
+    }
+
+    fn draw_episode_list_modal(&mut self, frame: &mut Frame) {
+        let area = centered_rect(60, 70, frame.size());
+        
+        frame.render_widget(Clear, area);
+        
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title("Choose Episode");
+
+        let visible_count = (area.height as usize).saturating_sub(2);
+        let episodes = &self.episodes;
+        let current_ep = self.player_controller.current_episode_idx();
+        
+        let lines = crate::ui::player_controller::EpisodeListModal::render(
+            episodes,
+            current_ep,
+            self.episode_list_scroll,
+            visible_count,
+        );
+
+        let text: Vec<Line> = lines.into_iter().map(|(line, _)| line).collect();
+        
+        let paragraph = Paragraph::new(Text::from(text))
+            .block(block);
+
+        frame.render_widget(paragraph, area);
+    }
+
+    fn draw_end_screen(&mut self, frame: &mut Frame) {
+        let area = frame.size();
+
+        let options = crate::ui::player_controller::EndScreen::render(
+            self.player_controller.has_next_episode()
+        );
+
+        let mut lines: Vec<Line> = vec![
+            Line::from(vec![Span::styled(
+                "Video Ended\n",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )]),
+            Line::from(""),
+        ];
+
+        for (line, _) in options {
+            lines.push(line);
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from("Press Enter to select, Esc to go back"));
+
+        let paragraph = Paragraph::new(Text::from(lines))
+            .alignment(Alignment::Center)
+            .block(Block::default().borders(Borders::ALL).title("Finished"));
+
+        frame.render_widget(paragraph, area);
+    }
+
+    fn draw_source_modal(&mut self, frame: &mut Frame) {
+        let area = centered_rect(50, 40, frame.size());
+        
+        frame.render_widget(Clear, area);
+
+        let sources: Vec<(String, Language, bool)> = vec![
+            ("AllAnime (English)".to_string(), Language::English, self.selected_source == Language::English),
+            ("KKPhim (Vietnamese)".to_string(), Language::Vietnamese, self.selected_source == Language::Vietnamese),
+        ];
+
+        SourceSelectModal::render(frame, area, &sources, self.selected_source_idx);
+    }
+
+    fn draw_toast(&self, frame: &mut Frame, toast: &Toast) {
+        let area = frame.size();
+        let toast_area = Rect {
+            x: area.width / 4,
+            y: area.height - 5,
+            width: area.width / 2,
+            height: 3,
+        };
+
+        let paragraph = Paragraph::new(toast.message.clone())
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::White).bg(Color::Blue))
+            .block(Block::default().borders(Borders::ALL));
+
+        frame.render_widget(paragraph, toast_area);
+    }
+
+    async fn handle_key(
+        &mut self,
+        key: KeyCode,
+    ) -> Result<()> {
+        if self.show_source_modal {
+            self.handle_source_modal_key(key).await?;
+            return Ok(());
+        }
+
+        if self.show_episode_list {
+            self.handle_episode_list_key(key).await?;
+            return Ok(());
+        }
+
+        match self.current_screen {
+            Screen::Splash => self.handle_splash_key(key).await,
+            Screen::SourceSelect => self.handle_source_select_key(key).await,
+            Screen::Home => self.handle_home_key(key).await,
+            Screen::Search => self.handle_search_key(key).await,
+            Screen::EpisodeSelect => self.handle_episode_select_key(key).await,
+            Screen::Player => self.handle_player_key(key).await,
+        }
+    }
+
+    async fn handle_episode_select_key(
+        &mut self,
+        key: KeyCode,
+    ) -> Result<()> {
+        match key {
+            KeyCode::Esc | KeyCode::Char('b') => {
+                // Go back to search
+                self.current_screen = Screen::Search;
+                self.episodes.clear();
+            }
+            KeyCode::Up => {
+                if self.episode_list_scroll > 0 {
+                    self.episode_list_scroll -= 1;
+                }
+            }
+            KeyCode::Down => {
+                if self.episode_list_scroll < self.episodes.len().saturating_sub(1) {
+                    self.episode_list_scroll += 1;
+                }
+            }
+            KeyCode::Enter => {
+                // Play selected episode
+                if let Some(anime) = self.selected_anime.as_ref().map(|a| a.base.clone()) {
+                    if self.episode_list_scroll < self.episodes.len() {
+                        self.player_controller.start_playback(
+                            anime,
+                            self.episodes.clone(),
+                            self.episode_list_scroll,
+                        );
+                        self.current_screen = Screen::Player;
+                        self.play_current_episode().await;
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    async fn handle_splash_key(
+        &mut self,
+        key: KeyCode,
+    ) -> Result<()> {
+        if key == KeyCode::Enter || key == KeyCode::Esc {
+            self.current_screen = Screen::SourceSelect;
+        }
+        Ok(())
+    }
+
+    async fn handle_source_select_key(
+        &mut self,
+        key: KeyCode,
+    ) -> Result<()> {
+        match key {
+            KeyCode::Esc => {
+                self.current_screen = Screen::Home;
+            }
+            KeyCode::Up => {
+                if self.selected_source_idx > 0 {
+                    self.selected_source_idx -= 1;
+                }
+            }
+            KeyCode::Down => {
+                if self.selected_source_idx < 1 {
+                    self.selected_source_idx += 1;
+                }
+            }
+            KeyCode::Enter => {
+                // Set source based on selection and go home
+                let new_source = if self.selected_source_idx == 0 {
+                    Language::English
+                } else {
+                    Language::Vietnamese
+                };
+                if new_source != self.selected_source {
+                    tracing::info!("Source changed from {:?} to {:?}", self.selected_source, new_source);
+                    self.selected_source = new_source;
+                }
+                self.current_screen = Screen::Home;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    async fn handle_home_key(
+        &mut self,
+        key: KeyCode,
+    ) -> Result<()> {
+        match key {
+            KeyCode::Char('q') | KeyCode::Char('Q') => {
+                self.should_quit = true;
+            }
+            KeyCode::Up => {
+                if self.continue_watching_selected > 0 {
+                    self.continue_watching_selected -= 1;
+                }
+            }
+            KeyCode::Down => {
+                let max_idx = self.continue_watching.len().saturating_sub(1);
+                if self.continue_watching_selected < max_idx {
+                    self.continue_watching_selected += 1;
+                }
+            }
+            KeyCode::Enter => {
+                // Resume the selected anime
+                if let Some(history) = self.continue_watching.get(self.continue_watching_selected).cloned() {
+                    self.resume_watching(history).await?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    async fn resume_watching(
+        &mut self,
+        history: crate::db::WatchHistory,
+    ) -> Result<()> {
+        tracing::info!("Resuming anime: {} - Ep {}", history.title, history.episode_number);
+        
+        // Find the provider for this history entry
+        if let Some(_provider) = self.providers.get_provider(&history.provider) {
+            // Create a basic Anime struct from history
+            let anime = crate::providers::Anime {
+                id: history.anime_id.split(':').nth(1).unwrap_or(&history.anime_id).to_string(),
+                provider: history.provider.clone(),
+                title: history.title.clone(),
+                cover_url: history.cover_url.clone(),
+                language: if history.provider == "KKPhim" { 
+                    crate::providers::Language::Vietnamese 
+                } else { 
+                    crate::providers::Language::English 
+                },
+                total_episodes: None,
+                synopsis: None,
+            };
+            
+            self.select_anime(anime).await?;
+        } else {
+            self.show_toast(format!("Provider {} not available", history.provider), 3);
+        }
+        
+        Ok(())
+    }
+
+    async fn handle_search_key(
+        &mut self,
+        key: KeyCode,
+    ) -> Result<()> {
+        match key {
+            KeyCode::Esc | KeyCode::Char('B') => {
+                self.current_screen = Screen::Home;
+                self.search_overlay.query.clear();
+                self.enriched_results.clear();
+                self.search_pending = false;
+                self.last_keypress = Instant::now();
+            }
+            KeyCode::Backspace => {
+                self.search_overlay.query.pop();
+                self.search_pending = true;
+                self.last_keypress = Instant::now();
+                // Clear results if empty
+                if self.search_overlay.query.is_empty() {
+                    self.enriched_results.clear();
+                    self.search_pending = false;
+                }
+            }
+            KeyCode::Char(c) => {
+                self.search_overlay.query.push(c);
+                self.search_pending = true;
+                self.last_keypress = Instant::now();
+                // Clear pending search if query is too short
+                if self.search_overlay.query.len() < 2 {
+                    self.search_pending = false;
+                }
+            }
+            KeyCode::Up => {
+                if self.selected_index > 0 {
+                    self.selected_index -= 1;
+                    self.load_preview().await;
+                }
+            }
+            KeyCode::Down => {
+                if self.selected_index < self.enriched_results.len().saturating_sub(1) {
+                    self.selected_index += 1;
+                    self.load_preview().await;
+                }
+            }
+            KeyCode::Enter => {
+                // Select the current anime and go to episode list
+                if let Some(anime) = self.enriched_results.get(self.selected_index).cloned() {
+                    self.selected_anime = Some(anime.clone());
+                    self.select_anime(anime.base).await?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    async fn handle_episode_list_key(
+        &mut self,
+        key: KeyCode,
+    ) -> Result<()> {
+        match key {
+            KeyCode::Esc => {
+                self.show_episode_list = false;
+            }
+            KeyCode::Up => {
+                if self.episode_list_scroll > 0 {
+                    self.episode_list_scroll -= 1;
+                }
+            }
+            KeyCode::Down => {
+                let visible = 20; // Approximate visible count
+                if self.episode_list_scroll + visible < self.episodes.len() {
+                    self.episode_list_scroll += 1;
+                }
+            }
+            KeyCode::Enter => {
+                // Play selected episode
+                let selected = self.episode_list_scroll;
+                if selected < self.episodes.len() {
+                    self.player_controller.select_episode(selected);
+                    self.play_current_episode().await;
+                }
+                self.show_episode_list = false;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    async fn handle_player_key(
+        &mut self,
+        key: KeyCode,
+    ) -> Result<()> {
+        match self.player_controller.state() {
+            PlayerState::Playing => {
+                // Any key shows controls
+                self.player_controller.show_controls();
+            }
+            PlayerState::ControlsVisible => {
+                match key {
+                    KeyCode::Esc => {
+                        self.player_controller.hide_controls();
+                    }
+                    KeyCode::Up => {
+                        self.player_controller.previous_control();
+                    }
+                    KeyCode::Down => {
+                        self.player_controller.next_control();
+                    }
+                    KeyCode::Enter => {
+                        self.execute_control_action().await;
+                    }
+                    KeyCode::Char('n') => {
+                        if self.player_controller.play_next_episode() {
+                            self.play_current_episode().await;
+                        }
+                    }
+                    KeyCode::Char('p') => {
+                        if self.player_controller.play_previous_episode() {
+                            self.play_current_episode().await;
+                        }
+                    }
+                    KeyCode::Char('e') => {
+                        self.show_episode_list = true;
+                        self.episode_list_scroll = self.player_controller.current_episode_idx();
+                    }
+                    KeyCode::Char('b') => {
+                        self.save_watch_history().await;
+                        self.current_screen = Screen::Search;
+                        self.player_controller = PlayerController::new();
+                    }
+                    _ => {}
+                }
+            }
+            PlayerState::Ended => {
+                match key {
+                    KeyCode::Esc | KeyCode::Char('b') => {
+                        self.save_watch_history().await;
+                        self.current_screen = Screen::Search;
+                        self.player_controller = PlayerController::new();
+                    }
+                    KeyCode::Enter => {
+                        // Default action: next episode or back
+                        if self.player_controller.has_next_episode() {
+                            self.player_controller.play_next_episode();
+                            self.play_current_episode().await;
+                        } else {
+                            self.current_screen = Screen::Search;
+                            self.player_controller = PlayerController::new();
+                        }
+                    }
+                    KeyCode::Char('r') => {
+                        self.play_current_episode().await;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn handle_source_modal_key(
+        &mut self,
+        key: KeyCode,
+    ) -> Result<()> {
+        match key {
+            KeyCode::Esc => {
+                self.show_source_modal = false;
+            }
+            KeyCode::Up => {
+                if self.selected_source_idx > 0 {
+                    self.selected_source_idx -= 1;
+                }
+            }
+            KeyCode::Down => {
+                if self.selected_source_idx < 1 {
+                    self.selected_source_idx += 1;
+                }
+            }
+            KeyCode::Enter => {
+                // Set source based on selection and close modal
+                let new_source = if self.selected_source_idx == 0 {
+                    Language::English
+                } else {
+                    Language::Vietnamese
+                };
+                if new_source != self.selected_source {
+                    tracing::info!("Source changed from {:?} to {:?}", self.selected_source, new_source);
+                    self.selected_source = new_source;
+                }
+                self.show_source_modal = false;
+                // Re-run search with new source
+                if !self.search_overlay.query.is_empty() {
+                    self.perform_search().await;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    async fn execute_control_action(&mut self,
+    ) {
+        match self.player_controller.get_selected_action() {
+            ControlAction::NextEpisode => {
+                if self.player_controller.play_next_episode() {
+                    self.play_current_episode().await;
+                }
+            }
+            ControlAction::PreviousEpisode => {
+                if self.player_controller.play_previous_episode() {
+                    self.play_current_episode().await;
+                }
+            }
+            ControlAction::ChooseEpisode => {
+                self.show_episode_list = true;
+                self.episode_list_scroll = self.player_controller.current_episode_idx();
+            }
+            ControlAction::Download => {
+                self.show_toast("Download not yet implemented".to_string(), 3);
+            }
+            ControlAction::BackToMenu => {
+                self.current_screen = Screen::Search;
+                self.player_controller = PlayerController::new();
+            }
+        }
+    }
+
+    async fn perform_search(&mut self) {
+        let query = self.search_overlay.query.clone();
+        
+        // Don't search if query is too short
+        if query.len() < 2 {
+            self.enriched_results.clear();
+            return;
+        }
+        
+        tracing::info!("Searching for '{}' with source: {:?}", query, self.selected_source);
+        
+        // Search selected source only
+        let mut all_results = Vec::new();
+        
+        match self.providers.search_filtered(&query, &[self.selected_source]).await {
+            Ok(mut results) => {
+                tracing::info!("Found {} results from {:?}", results.len(), self.selected_source);
+                all_results.append(&mut results);
+            }
+            Err(e) => {
+                tracing::warn!("Search failed for {:?}: {}", self.selected_source, e);
+            }
+        }
+        
+        // Update results
+        let enriched: Vec<_> = all_results.into_iter()
+            .map(|base| crate::metadata::EnrichedAnime { base, metadata: None })
+            .collect();
+        
+        self.enriched_results = enriched;
+        self.selected_index = 0;
+        
+        // Load preview for first result
+        if !self.enriched_results.is_empty() {
+            self.load_preview().await;
+        }
+    }
+
+    async fn load_preview(&mut self) {
+        if let Some(anime) = self.enriched_results.get_mut(self.selected_index) {
+            // Load image
+            let id = anime.base.id.clone();
+            let url = anime.base.cover_url.clone();
+            
+            // Try to get image from cache or download
+            if let Some(image) = self.image_pipeline.get_image(&id).await {
+                self.current_image_data = Some(image.data);
+            } else if !url.is_empty() {
+                // Request download (don't block UI if it fails)
+                let image_result = self.image_pipeline.request_download(id.clone(), url.clone()).await;
+                if let Ok(data) = image_result {
+                    self.current_image_data = Some(data);
+                } else {
+                    self.current_image_data = None;
+                }
+            }
+            
+            // Fetch metadata if not already loaded
+            if anime.metadata.is_none() {
+                if let Ok(metadata_list) = self.metadata_cache.search_and_cache(&anime.base.title).await {
+                    // Use first metadata result
+                    if let Some(metadata) = metadata_list.into_iter().next() {
+                        anime.metadata = Some(metadata);
+                    }
+                }
+            }
+        }
+    }
+
+    async fn save_watch_history(&self) {
+        use chrono::Utc;
+        
+        if let Some(anime) = self.selected_anime.as_ref() {
+            if let Some(episode) = self.player_controller.current_episode() {
+                let anime_id = format!("{}:{}", anime.base.provider, anime.base.id);
+                let history = crate::db::WatchHistory {
+                    anime_id,
+                    provider: anime.base.provider.clone(),
+                    title: anime.base.title.clone(),
+                    cover_url: anime.base.cover_url.clone(),
+                    episode_number: episode.number,
+                    episode_title: episode.title.clone(),
+                    position_seconds: 0, // We don't track exact position yet
+                    total_seconds: 0,    // We don't know total duration
+                    updated_at: Utc::now(),
+                };
+                let _ = self.db.save_watch_history(&history).await;
+                tracing::info!("Saved watch history for {} ep {}", anime.base.title, episode.number);
+            }
+        }
+    }
+
+    async fn select_anime(
+        &mut self,
+        anime: crate::providers::Anime,
+    ) -> Result<()> {
+        tracing::info!("Selecting anime: {} from provider: {}", anime.title, anime.provider);
+        
+        self.selected_anime = Some(crate::metadata::EnrichedAnime {
+            base: anime.clone(),
+            metadata: None,
+        });
+        self.episodes.clear();
+        self.show_toast(format!("Loading episodes for {}...", anime.title), 3);
+
+        // Load episodes from the provider
+        if let Some(provider) = self.providers.get_provider(&anime.provider) {
+            tracing::info!("Found provider, loading episodes for anime_id: {}", anime.id);
+            match provider.get_episodes(&anime.id).await {
+                Ok(episodes) => {
+                    tracing::info!("Loaded {} episodes", episodes.len());
+                    self.episodes = episodes;
+                    if !self.episodes.is_empty() {
+                        // Go to episode selection screen instead of playing immediately
+                        self.episode_list_scroll = 0;
+                        self.current_screen = Screen::EpisodeSelect;
+                        self.show_toast(format!("Found {} episodes", self.episodes.len()), 2);
+                    } else {
+                        self.show_toast("No episodes found".to_string(), 3);
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to load episodes: {}", e);
+                    self.show_toast(format!("Error: {}", e), 5);
+                }
+            }
+        } else {
+            tracing::error!("Provider {} not found", anime.provider);
+            self.show_toast("Provider not available".to_string(), 3);
+        }
+
+        Ok(())
+    }
+
+    async fn play_current_episode(&mut self,
+    ) {
+        if let Some(episode) = self.player_controller.current_episode() {
+            let anime = self.player_controller.current_anime()
+                .cloned()
+                .unwrap_or_else(|| {
+                    self.selected_anime.as_ref().unwrap().base.clone()
+                });
+
+            let provider_name = anime.provider.clone();
+            let episode_id = format!("{}:{}", anime.id, episode.number);
+            
+            tracing::info!("Playing episode {} for anime {} (provider: {})", 
+                episode.number, anime.title, provider_name);
+            tracing::debug!("Episode ID format: {}", episode_id);
+
+            self.show_toast(format!("Loading: {} Ep {}...", anime.title, episode.number), 5);
+
+            // Spawn playback in background
+            tokio::spawn(async move {
+                let provider: Box<dyn AnimeProvider> = match provider_name.as_str() {
+                    "AllAnime" => Box::new(crate::providers::allanime::AllAnimeProvider::new()),
+                    "KKPhim" => Box::new(crate::providers::kkphim::KkphimProvider::new()),
+                    _ => return,
+                };
+
+                match provider.get_stream_url(&episode_id).await {
+                    Ok(stream_info) => {
+                        if !stream_info.video_url.is_empty() {
+                            let player = Player::new();
+                            let _ = player.start_detached(
+                                &stream_info.video_url,
+                                &stream_info.subtitles,
+                                &stream_info.headers,
+                                None,
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to get stream URL: {}", e);
+                    }
+                }
+            });
+        }
+    }
+
+    fn show_toast(
+        &mut self,
+        message: String,
+        duration_secs: u64,
+    ) {
+        self.toast = Some(Toast::new(message, duration_secs));
+    }
+
+    async fn on_tick(
+        &mut self,
+    ) -> Result<()> {
+        // Update splash screen
+        if self.current_screen == Screen::Splash {
+            self.splash_screen.tick();
+            if self.splash_screen.is_complete(self.splash_start.elapsed().as_millis() as u64) {
+                self.current_screen = Screen::SourceSelect;
+            }
+            return Ok(());
+        }
+
+        // Tick loading spinner
+        if !self.enriched_results.is_empty() || !self.search_overlay.query.is_empty() {
+            self.loading_spinner.tick();
+        }
+
+        // Check toast expiration
+        if let Some(ref toast) = self.toast {
+            if toast.is_expired() {
+                self.toast = None;
+            }
+        }
+
+        // Check player controls timeout
+        if self.player_controller.state() == PlayerState::ControlsVisible {
+            if self.player_controller.controls_timeout_reached(5) {
+                self.player_controller.hide_controls();
+            }
+        }
+
+        // Check mpv status
+        if self.current_screen == Screen::Player {
+            self.player_controller.check_mpv_status();
+        }
+
+        // Smart auto-search with debounce
+        if self.search_pending && self.current_screen == Screen::Search {
+            // Check if 500ms has passed since last keypress
+            if self.last_keypress.elapsed().as_millis() >= 500 {
+                self.search_pending = false;
+                if self.search_overlay.query.len() >= 2 {
+                    // Update UI to show searching
+                    self.search_overlay.is_searching = true;
+                    
+                    // Perform search
+                    self.perform_search().await;
+                    
+                    // Stop showing searching indicator
+                    self.search_overlay.is_searching = false;
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
+}

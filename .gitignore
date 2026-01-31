@@ -1,0 +1,22 @@
+# Rust
+target/
+Cargo.lock
+**/*.rs.bk
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Application data
+*.db
+*.db-journal
+
+# Config (don't commit personal configs)
+config.toml

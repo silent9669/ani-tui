@@ -1,0 +1,487 @@
+use super::components::LoadingSpinner;
+use ratatui::{
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span, Text},
+    widgets::{Block, Borders, Paragraph, Wrap},
+    Frame,
+};
+
+pub struct SplashScreen {
+    frame_count: usize,
+    loading_spinner: LoadingSpinner,
+    loading_progress: u8, // 0-100
+}
+
+impl SplashScreen {
+    pub fn new() -> Self {
+        Self {
+            frame_count: 0,
+            loading_spinner: LoadingSpinner::new(),
+            loading_progress: 0,
+        }
+    }
+
+    pub fn tick(&mut self) {
+        self.frame_count += 1;
+        self.loading_spinner.tick();
+        // Simulate loading progress - faster (5% per tick)
+        if self.loading_progress < 100 {
+            self.loading_progress = (self.loading_progress + 5).min(100);
+        }
+    }
+
+    pub fn render(&self, frame: &mut Frame, area: Rect) {
+        // Create centered layout
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Percentage(40),
+                Constraint::Length(3), // Title
+                Constraint::Length(1), // Loading bar
+                Constraint::Length(1), // Loading spinner
+                Constraint::Min(0),
+            ])
+            .split(area);
+
+        // Calculate fade-in alpha (0.0 to 1.0) over first 20 frames (~2 seconds)
+        let fade_progress = (self.frame_count as f32 / 20.0).min(1.0);
+
+        // Blue color with fade-in
+        let blue_intensity = (255.0 * fade_progress) as u8;
+        let title_color = Color::Rgb(0, 100, blue_intensity);
+        let title_style = Style::default()
+            .fg(title_color)
+            .add_modifier(Modifier::BOLD);
+
+        let title = Paragraph::new("ANI-TUI")
+            .alignment(Alignment::Center)
+            .style(title_style);
+        frame.render_widget(title, chunks[1]);
+
+        // Loading bar
+        let bar_width = 30;
+        let filled = (self.loading_progress as usize * bar_width) / 100;
+        let empty = bar_width - filled;
+        let bar_text = format!("[{}{}]", "█".repeat(filled), "░".repeat(empty));
+        let bar_color = self.get_loading_bar_color();
+        let loading_bar = Paragraph::new(bar_text)
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(bar_color));
+        frame.render_widget(loading_bar, chunks[2]);
+
+        // Loading spinner
+        let spinner_line = self.loading_spinner.render();
+        let spinner_text = Paragraph::new(spinner_line).alignment(Alignment::Center);
+        frame.render_widget(spinner_text, chunks[3]);
+    }
+
+    fn get_loading_bar_color(&self) -> Color {
+        // Blue color that gets brighter as it fills
+        Color::Rgb(0, 100, 255)
+    }
+
+    pub fn is_complete(&self, elapsed_ms: u64) -> bool {
+        elapsed_ms > 2000 // Show for 2 seconds
+    }
+}
+
+pub struct PreviewPanel;
+
+impl PreviewPanel {
+    pub fn render(
+        frame: &mut Frame,
+        area: Rect,
+        anime: Option<&crate::metadata::EnrichedAnime>,
+        image_data: Option<&[Vec<u8>]>,
+    ) {
+        let block = Block::default().borders(Borders::ALL).title("Preview");
+
+        if let Some(anime) = anime {
+            // Split area into image (top) and info (bottom)
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Percentage(40), // Image area
+                    Constraint::Percentage(60), // Info area
+                ])
+                .margin(1)
+                .split(area);
+
+            // Render image using chafa if available
+            let has_image = image_data
+                .and_then(|d| d.first())
+                .map(|d| !d.is_empty())
+                .unwrap_or(false);
+
+            // Image rendering disabled to prevent UI corruption
+            // Show placeholder with cover URL info instead
+            Self::render_image_placeholder(frame, chunks[0], has_image);
+
+            // Render info text
+            let mut lines: Vec<Line> = Vec::new();
+
+            // Title
+            lines.push(Line::from(vec![Span::styled(
+                anime.base.title.clone(),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )]));
+
+            // Language badge
+            let lang_color = match anime.base.language {
+                crate::providers::Language::English => Color::Blue,
+                crate::providers::Language::Vietnamese => Color::Yellow,
+            };
+            lines.push(Line::from(vec![Span::styled(
+                format!("[{}]", anime.base.language),
+                Style::default().fg(lang_color),
+            )]));
+
+            lines.push(Line::from(""));
+
+            // Always show episodes from base info first
+            if let Some(eps) = anime.base.total_episodes {
+                lines.push(Line::from(vec![
+                    Span::raw("Episodes: "),
+                    Span::styled(eps.to_string(), Style::default().fg(Color::Green)),
+                ]));
+            } else if let Some(ref metadata) = anime.metadata {
+                if let Some(episodes) = metadata.episode_count {
+                    lines.push(Line::from(vec![
+                        Span::raw("Episodes: "),
+                        Span::styled(episodes.to_string(), Style::default().fg(Color::Green)),
+                    ]));
+                }
+            }
+
+            // Rating from metadata
+            if let Some(ref metadata) = anime.metadata {
+                if let Some(rating) = metadata.rating {
+                    let stars = Self::render_stars(rating);
+                    lines.push(Line::from(vec![
+                        Span::raw("Rating: "),
+                        Span::styled(stars, Style::default().fg(Color::Yellow)),
+                        Span::raw(format!(" {:.1}/10", rating as f64 / 10.0)),
+                    ]));
+                }
+
+                // Genres
+                if !metadata.genres.is_empty() {
+                    let genre_text = metadata.genres.join(", ");
+                    lines.push(Line::from(vec![
+                        Span::raw("Genres: "),
+                        Span::styled(genre_text, Style::default().fg(Color::Magenta)),
+                    ]));
+                }
+
+                lines.push(Line::from(""));
+
+                // Description from metadata
+                if let Some(ref desc) = metadata.description {
+                    let clean_desc = desc
+                        .replace("<br>", "\n")
+                        .replace("<br/>", "\n")
+                        .replace("</i>", "")
+                        .replace("<i>", "")
+                        .replace("<b>", "")
+                        .replace("</b>", "");
+
+                    for line in clean_desc.lines().take(6) {
+                        if !line.trim().is_empty() {
+                            lines.push(Line::from(line.to_string()));
+                        }
+                    }
+                }
+            } else {
+                // No metadata yet
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "Loading metadata...",
+                    Style::default().fg(Color::Gray),
+                )));
+
+                // Show base synopsis if available
+                if let Some(ref synopsis) = anime.base.synopsis {
+                    lines.push(Line::from(""));
+                    for line in synopsis.lines().take(5) {
+                        if !line.trim().is_empty() {
+                            lines.push(Line::from(line.to_string()));
+                        }
+                    }
+                }
+            }
+
+            let info_block = Block::default().borders(Borders::TOP);
+            let paragraph = Paragraph::new(Text::from(lines))
+                .block(info_block)
+                .wrap(Wrap { trim: true });
+
+            frame.render_widget(paragraph, chunks[1]);
+
+            // Render outer block
+            frame.render_widget(block, area);
+        } else {
+            let paragraph = Paragraph::new("Select an anime to see details")
+                .block(block)
+                .alignment(Alignment::Center);
+            frame.render_widget(paragraph, area);
+        }
+    }
+
+    fn render_stars(rating: i64) -> String {
+        let stars = rating / 20; // 0-100 to 0-5
+        let filled = "★".repeat(stars as usize);
+        let empty = "☆".repeat(5 - stars as usize);
+        format!("{}{}", filled, empty)
+    }
+
+    fn render_image_placeholder(frame: &mut Frame, area: Rect, has_image: bool) {
+        let image_lines: Vec<Line> = if has_image {
+            vec![
+                Line::from(vec![Span::styled(
+                    "┌─────────────────────────────────────┐",
+                    Style::default().fg(Color::Blue),
+                )]),
+                Line::from(vec![Span::styled(
+                    "│         📷 COVER IMAGE              │",
+                    Style::default().fg(Color::Cyan),
+                )]),
+                Line::from(vec![Span::styled(
+                    "│                                     │",
+                    Style::default().fg(Color::Blue),
+                )]),
+                Line::from(vec![Span::styled(
+                    "│     [Image Preview Available]       │",
+                    Style::default().fg(Color::Gray),
+                )]),
+                Line::from(vec![Span::styled(
+                    "│                                     │",
+                    Style::default().fg(Color::Blue),
+                )]),
+                Line::from(vec![Span::styled(
+                    "└─────────────────────────────────────┘",
+                    Style::default().fg(Color::Blue),
+                )]),
+            ]
+        } else {
+            vec![
+                Line::from(vec![Span::styled(
+                    "┌─────────────────────────────────────┐",
+                    Style::default().fg(Color::Gray),
+                )]),
+                Line::from(vec![Span::styled(
+                    "│                                     │",
+                    Style::default().fg(Color::Gray),
+                )]),
+                Line::from(vec![Span::styled(
+                    "│         [No Image Available]        │",
+                    Style::default().fg(Color::DarkGray),
+                )]),
+                Line::from(vec![Span::styled(
+                    "│                                     │",
+                    Style::default().fg(Color::Gray),
+                )]),
+                Line::from(vec![Span::styled(
+                    "└─────────────────────────────────────┘",
+                    Style::default().fg(Color::Gray),
+                )]),
+            ]
+        };
+
+        let image_widget = Paragraph::new(Text::from(image_lines)).alignment(Alignment::Center);
+        frame.render_widget(image_widget, area);
+    }
+}
+
+pub struct SearchOverlay {
+    pub query: String,
+    pub results: Vec<crate::metadata::EnrichedAnime>,
+    pub selected_index: usize,
+    pub is_searching: bool,
+}
+
+impl SearchOverlay {
+    pub fn new() -> Self {
+        Self {
+            query: String::new(),
+            results: Vec::new(),
+            selected_index: 0,
+            is_searching: false,
+        }
+    }
+
+    pub fn render(&self, frame: &mut Frame, area: Rect, sources: &[crate::providers::Language]) {
+        let layout = ratatui::layout::Layout::default()
+            .direction(ratatui::layout::Direction::Vertical)
+            .margin(1)
+            .constraints([
+                ratatui::layout::Constraint::Length(3), // Search input
+                ratatui::layout::Constraint::Min(0),    // Results
+            ])
+            .split(area);
+
+        // Search input
+        let search_block = Block::default()
+            .borders(Borders::ALL)
+            .title(format!("Search ({} active)", sources.len()));
+
+        let search_text = if self.is_searching {
+            format!("{} ▐", self.query)
+        } else {
+            format!("{}_", self.query)
+        };
+
+        let search_input = Paragraph::new(search_text).block(search_block);
+        frame.render_widget(search_input, layout[0]);
+
+        // Results list
+        let results_block = Block::default().borders(Borders::ALL).title(format!(
+            "Results ({}) - Shift+C: change source | Shift+B: back home",
+            self.results.len()
+        ));
+
+        let mut lines: Vec<Line> = Vec::new();
+
+        for (idx, anime) in self.results.iter().enumerate() {
+            let is_selected = idx == self.selected_index;
+
+            let lang_color = match anime.base.language {
+                crate::providers::Language::English => Color::Blue,
+                crate::providers::Language::Vietnamese => Color::Yellow,
+            };
+
+            let badge = Span::styled(
+                format!("[{}]", anime.base.language),
+                Style::default().fg(lang_color),
+            );
+
+            let title_style = if is_selected {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
+            let prefix = if is_selected { "▶ " } else { "  " };
+
+            lines.push(Line::from(vec![
+                Span::raw(prefix),
+                badge,
+                Span::raw(" "),
+                Span::styled(&anime.base.title, title_style),
+            ]));
+        }
+
+        if self.results.is_empty() && !self.query.is_empty() && !self.is_searching {
+            lines.push(Line::from("No results found"));
+        } else if self.query.is_empty() {
+            lines.push(Line::from("Type to search..."));
+        }
+
+        let results_list = Paragraph::new(Text::from(lines))
+            .block(results_block)
+            .wrap(Wrap { trim: true });
+
+        frame.render_widget(results_list, layout[1]);
+    }
+}
+
+pub struct SourceSelectModal;
+
+impl SourceSelectModal {
+    pub fn render(
+        frame: &mut Frame,
+        area: Rect,
+        sources: &[(String, crate::providers::Language, bool)], // (name, lang, enabled)
+        selected: usize,
+    ) {
+        // Create centered layout
+        let vertical_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Percentage(30),
+                Constraint::Min(10),
+                Constraint::Percentage(30),
+            ])
+            .split(area);
+
+        let horizontal_layout = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(20),
+                Constraint::Min(40),
+                Constraint::Percentage(20),
+            ])
+            .split(vertical_layout[1]);
+
+        let modal_area = horizontal_layout[1];
+
+        // Caption at the top
+        let caption = Paragraph::new("Select ONE subtitle language:")
+            .alignment(Alignment::Center)
+            .style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            );
+
+        // Split modal area for caption and content
+        let modal_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(2), Constraint::Min(0)])
+            .split(modal_area);
+
+        frame.render_widget(caption, modal_chunks[0]);
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title("Select Source (Enter to confirm)");
+
+        let mut lines: Vec<Line> = Vec::new();
+
+        for (idx, (name, lang, enabled)) in sources.iter().enumerate() {
+            let is_selected = idx == selected;
+
+            let prefix = if is_selected { "> " } else { "  " };
+            // Radio button: filled circle if enabled, empty circle if not
+            let radio = if *enabled { "(◉)" } else { "(○)" };
+
+            let lang_badge = match lang {
+                crate::providers::Language::English => {
+                    Span::styled("[EN]", Style::default().fg(Color::Blue))
+                }
+                crate::providers::Language::Vietnamese => {
+                    Span::styled("[VN]", Style::default().fg(Color::Yellow))
+                }
+            };
+
+            let style = if is_selected {
+                Style::default().add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled(format!("{}{} ", prefix, radio), style),
+                lang_badge,
+                Span::raw(" "),
+                Span::styled(name.clone(), style),
+            ]));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "Only one source can be active at a time",
+            Style::default().fg(Color::Gray),
+        )));
+
+        let paragraph = Paragraph::new(Text::from(lines))
+            .block(block)
+            .alignment(Alignment::Center);
+
+        frame.render_widget(paragraph, modal_chunks[1]);
+    }
+}

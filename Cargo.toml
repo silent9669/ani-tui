@@ -1,0 +1,59 @@
+[package]
+name = "ani-tui"
+version = "3.0.0"
+edition = "2021"
+authors = ["Your Name <you@example.com>"]
+description = "A Netflix-inspired TUI for anime streaming"
+license = "MIT"
+repository = "https://github.com/yourusername/ani-tui"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# TUI framework
+tui = "0.19"
+crossterm = "0.27"
+ratatui = "0.24"
+
+# Image support
+ratatui-image = "1.0"
+image = { version = "0.24", default-features = false, features = ["png", "jpeg"] }
+
+# HTTP client
+reqwest = { version = "0.11", features = ["json"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Database
+rusqlite = { version = "0.30", features = ["bundled"] }
+
+# Configuration directories
+directories = "5.0"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# CLI arguments
+clap = { version = "4.4", features = ["derive"] }
+
+# Async traits
+async-trait = "0.1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+url = "2.5"
+regex = "1.10"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
