@@ -87,13 +87,17 @@ Then restart your terminal.
 
 ## Troubleshooting
 
-### Windows: "ani-tui" command does nothing (no output)
+### Windows: "ani-tui" command does nothing (no output, just returns to prompt)
 
 **This means you're missing Visual C++ Redistributable!**
 
-1. Install it: https://aka.ms/vs/17/release/vc_redist.x64.exe
-2. Restart your computer
-3. Try again
+**Solution:**
+1. Install Visual C++ Redistributable: https://aka.ms/vs/17/release/vc_redist.x64.exe
+2. **Restart your computer** (This is REQUIRED!)
+3. Open a new terminal
+4. Try `ani-tui` again
+
+**Why this happens:** ani-tui is built with Rust and requires Microsoft's Visual C++ runtime libraries. Most Windows PCs have this pre-installed, but fresh systems or VMs don't.
 
 ### Windows: "ani-tui" command not found
 
