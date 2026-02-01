@@ -66,6 +66,29 @@ ani-tui -q "Attack on Titan"
   - macOS: `brew install chafa`
   - Windows: Download from [hpjansson.org/chafa](https://hpjansson.org/chafa/)
 
+## Troubleshooting
+
+### Windows: "ani-tui" command not found
+
+If typing `ani-tui` doesn't work after installation:
+
+1. **Open a NEW terminal window** (PATH changes require a fresh PowerShell/CMD session)
+2. Try running the full path:
+   ```powershell
+   $env:LOCALAPPDATA\ani-tui\ani-tui.exe
+   ```
+3. Or run the diagnostic tool:
+   ```powershell
+   iwr -useb https://raw.githubusercontent.com/silent9669/ani-tui/master/packaging/windows/diagnose.ps1 | iex
+   ```
+
+### Video doesn't play
+
+You must install **mpv** before using ani-tui:
+- **Windows**: Download from [mpv.io](https://mpv.io/installation/) or use `winget install mpv`
+- **macOS**: `brew install mpv`
+- **Linux**: `sudo apt install mpv`
+
 ## License
 
 MIT License - See LICENSE file for details

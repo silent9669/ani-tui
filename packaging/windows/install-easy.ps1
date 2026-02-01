@@ -1,5 +1,5 @@
-# Windows Easy Installer for ani-tui
-# This script downloads and installs ani-tui with all dependencies
+# Windows Easy Installer for ani-tui v2
+# Improved installer with better PATH handling and diagnostics
 
 param(
     [string]$InstallDir = "$env:LOCALAPPDATA\ani-tui"
@@ -43,14 +43,36 @@ Write-Host "Extracting files..." -ForegroundColor Gray
 Expand-Archive -Path $zipPath -DestinationPath $InstallDir -Force
 Remove-Item $zipPath -Force
 
+# Verify binary exists
+$binaryPath = Join-Path $InstallDir "ani-tui.exe"
+if (-not (Test-Path $binaryPath)) {
+    Write-Host "Error: ani-tui.exe not found after extraction!" -ForegroundColor Red
+    Write-Host "Expected at: $binaryPath" -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "Binary found at: $binaryPath" -ForegroundColor Green
+
 # Add to PATH
 Write-Host "Adding to PATH..." -ForegroundColor Gray
 $currentPath = [Environment]::GetEnvironmentVariable("PATH", "User")
 if ($currentPath -notlike "*$InstallDir*") {
     [Environment]::SetEnvironmentVariable("PATH", "$currentPath;$InstallDir", "User")
-    $env:PATH = "$env:PATH;$InstallDir"
     Write-Host "Added to PATH successfully!" -ForegroundColor Green
+} else {
+    Write-Host "Already in PATH" -ForegroundColor Gray
 }
+
+# Also update current session PATH
+$env:PATH = "$env:PATH;$InstallDir"
+
+# Create wrapper batch file for easy access
+$wrapperPath = Join-Path $InstallDir "ani-tui.bat"
+$wrapperContent = @"
+@echo off
+"$binaryPath" %*
+"@
+Set-Content -Path $wrapperPath -Value $wrapperContent
 
 # Check for dependencies
 Write-Host ""
@@ -60,14 +82,27 @@ Write-Host "Checking dependencies..." -ForegroundColor Gray
 $chafa = Get-Command chafa -ErrorAction SilentlyContinue
 if (-not $chafa) {
     Write-Host "  chafa not found. Image previews will not work." -ForegroundColor Yellow
-    Write-Host "  Install from: https://hpjansson.org/chafa/" -ForegroundColor Gray
 }
 
 # Check for mpv
 $mpv = Get-Command mpv -ErrorAction SilentlyContinue
 if (-not $mpv) {
     Write-Host "  mpv not found. Video playback will not work." -ForegroundColor Yellow
-    Write-Host "  Install from: https://mpv.io/installation/" -ForegroundColor Gray
+    Write-Host "" -ForegroundColor White
+    Write-Host "IMPORTANT: You need to install mpv before using ani-tui!" -ForegroundColor Red
+    Write-Host "Download from: https://mpv.io/installation/" -ForegroundColor Cyan
+}
+
+# Test the binary
+Write-Host ""
+Write-Host "Testing installation..." -ForegroundColor Gray
+try {
+    $version = & $binaryPath --version 2>&1
+    if ($version) {
+        Write-Host "✓ ani-tui is working! Version: $version" -ForegroundColor Green
+    }
+} catch {
+    Write-Host "Warning: Could not verify ani-tui. Error: $_" -ForegroundColor Yellow
 }
 
 # Installation complete
@@ -83,20 +118,16 @@ Write-Host "  ani-tui              - Start the app"
 Write-Host "  ani-tui -q ""naruto"" - Search immediately"
 Write-Host ""
 Write-Host "Getting Started:" -ForegroundColor Cyan
-Write-Host "  1. Open a new terminal window"
+Write-Host "  1. Open a NEW terminal window (important!)"
 Write-Host "  2. Type 'ani-tui' to launch"
 Write-Host "  3. Press Shift+S to search"
 Write-Host ""
 
-# Test installation
-try {
-    $version = & "$InstallDir\ani-tui.exe" --version 2>$null
-    if ($version) {
-        Write-Host "Version: $version" -ForegroundColor Green
-    }
-} catch {
-    # Ignore errors
+if (-not $mpv) {
+    Write-Host "⚠️  IMPORTANT: Install mpv first or video won't play!" -ForegroundColor Red
+    Write-Host "   Download: https://mpv.io/installation/" -ForegroundColor Yellow
+    Write-Host ""
 }
 
-Write-Host "Press any key to exit..."
-$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+Write-Host "Press Enter to exit..."
+Read-Host
