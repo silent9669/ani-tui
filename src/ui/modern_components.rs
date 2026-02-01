@@ -32,27 +32,27 @@ impl SplashScreen {
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect) {
-        // Create centered layout with title and version
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Percentage(30),
-                Constraint::Length(3), // Title "ANI-TUI"
-                Constraint::Length(1), // Version tag
-                Constraint::Length(1), // Spacing
-                Constraint::Length(1), // Loading bar
+                Constraint::Length(3),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
                 Constraint::Min(0),
             ])
             .split(area);
 
-        // Calculate fade-in alpha (0.0 to 1.0) over first 20 frames (~2 seconds)
         let fade_progress = (self.frame_count as f32 / 20.0).min(1.0);
 
-        // Blue color with fade-in
-        let blue_intensity = (255.0 * fade_progress) as u8;
-        let title_color = Color::Rgb(0, 100, blue_intensity);
+        let pink = (255.0 * fade_progress) as u8;
+        let purple = (150.0 * fade_progress) as u8;
+        let blue = (200.0 * fade_progress) as u8;
 
-        // ANI-TUI Title with fade-in effect
+        let title_color = Color::Rgb(pink, 50, purple + 50);
+        let accent_color = Color::Rgb(blue, 100, 255);
+
         let title_style = Style::default()
             .fg(title_color)
             .add_modifier(Modifier::BOLD);
@@ -62,21 +62,19 @@ impl SplashScreen {
             .style(title_style);
         frame.render_widget(title_text, chunks[1]);
 
-        // Version tag with fade-in effect
         let version_style = Style::default()
-            .fg(title_color)
-            .add_modifier(Modifier::BOLD);
+            .fg(accent_color)
+            .add_modifier(Modifier::DIM);
 
         let version_text = Paragraph::new("v3.0.0")
             .alignment(Alignment::Center)
             .style(version_style);
         frame.render_widget(version_text, chunks[2]);
 
-        // Loading bar
         let bar_width = 30;
         let filled = (self.loading_progress as usize * bar_width) / 100;
         let empty = bar_width - filled;
-        let bar_text = format!("[{}{}]", "█".repeat(filled), "░".repeat(empty));
+        let bar_text = format!("[{}{}]", "▓".repeat(filled), "░".repeat(empty));
         let bar_color = self.get_loading_bar_color();
         let loading_bar = Paragraph::new(bar_text)
             .alignment(Alignment::Center)
@@ -85,8 +83,11 @@ impl SplashScreen {
     }
 
     fn get_loading_bar_color(&self) -> Color {
-        // Blue color that gets brighter as it fills
-        Color::Rgb(0, 100, 255)
+        let progress = self.loading_progress as f32 / 100.0;
+        let r = (100.0 + 155.0 * progress) as u8;
+        let g = (50.0 + 100.0 * progress) as u8;
+        let b = (200.0 + 55.0 * progress) as u8;
+        Color::Rgb(r, g, b)
     }
 
     pub fn is_complete(&self, elapsed_ms: u64) -> bool {
@@ -101,39 +102,34 @@ impl PreviewPanel {
         frame: &mut Frame,
         area: Rect,
         anime: Option<&crate::metadata::EnrichedAnime>,
-        image_data: Option<&[Vec<u8>]>,
+        app: &mut crate::ui::app::App,
     ) {
         let block = Block::default().borders(Borders::ALL).title("Preview");
 
         if let Some(anime) = anime {
-            // Split area into image (top) and info (bottom) - portrait orientation
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Percentage(70), // Image area (portrait orientation)
-                    Constraint::Percentage(30), // Info area
-                ])
+                .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
                 .margin(1)
                 .split(area);
 
-            // Render image using chafa if available
-            let has_image = image_data
-                .and_then(|d| d.first())
+            let has_image = app
+                .current_image_data
+                .as_ref()
                 .map(|d| !d.is_empty())
                 .unwrap_or(false);
 
-            // Try to render image using chafa if available
             if has_image {
-                if let Some(data) = image_data.and_then(|d| d.first()) {
-                    Self::render_image_with_ascii(frame, chunks[0], data);
+                let image_data = app.current_image_data.clone();
+                if let Some(data) = image_data {
+                    app.render_image_with_ratatui(frame, chunks[0], &data);
                 } else {
-                    Self::render_image_placeholder(frame, chunks[0], true);
+                    Self::render_image_placeholder(frame, chunks[0], false);
                 }
             } else {
                 Self::render_image_placeholder(frame, chunks[0], false);
             }
 
-            // Render info text
             let mut lines: Vec<Line> = Vec::new();
 
             // Title
@@ -307,46 +303,6 @@ impl PreviewPanel {
 
         let image_widget = Paragraph::new(Text::from(image_lines)).alignment(Alignment::Center);
         frame.render_widget(image_widget, area);
-    }
-
-    fn render_image_with_ascii(frame: &mut Frame, area: Rect, image_data: &[u8]) {
-        use crate::image::AsciiRenderer;
-        use crate::ui::supports_images;
-
-        let supports_image = supports_images();
-
-        if supports_image && !image_data.is_empty() {
-            // For terminals that support images, show a clean placeholder
-            // The actual image will be displayed via escape sequences when needed
-            let placeholder = Paragraph::new("Press Enter to view image")
-                .alignment(Alignment::Center)
-                .style(Style::default().fg(Color::DarkGray))
-                .block(Block::default().borders(Borders::ALL).title("Cover Image"));
-
-            frame.render_widget(placeholder, area);
-        } else {
-            // Fallback to ASCII rendering for terminals without image support
-            let renderer = AsciiRenderer::new();
-            let width = area.width.saturating_sub(2) as u32;
-            let height = area.height.saturating_sub(2) as u32;
-
-            match renderer.render(image_data, width, height) {
-                Ok(rendered) => {
-                    let lines: Vec<Line> = rendered
-                        .lines()
-                        .take(area.height as usize)
-                        .map(|line| Line::from(line.to_string()))
-                        .collect();
-
-                    let image_widget = Paragraph::new(Text::from(lines));
-                    frame.render_widget(image_widget, area);
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to render image: {}", e);
-                    Self::render_image_placeholder(frame, area, true);
-                }
-            }
-        }
     }
 }
 

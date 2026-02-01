@@ -21,7 +21,8 @@ use ratatui::{
     widgets::{Block, Borders, Clear, ListState, Paragraph},
     Frame, Terminal,
 };
-use std::io;
+use std::io::{self, Write};
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -81,7 +82,8 @@ pub struct App {
     toast: Option<Toast>,
 
     // Image cache for current preview
-    current_image_data: Option<Vec<u8>>,
+    pub(crate) current_image_data: Option<Vec<u8>>,
+    current_sixel_cache: Option<String>,
 
     // Track previous screen for navigation
     previous_screen: Option<Screen>,
@@ -142,8 +144,13 @@ impl App {
         // Database already has internal locking
         let metadata_cache = MetadataCache::new(db.clone());
 
-        // AsciiRenderer is always available (pure Rust crate)
-        // No external dependencies required
+        // Check if chafa is available for image rendering
+        if !Self::is_chafa_available() {
+            eprintln!("Warning: chafa is not installed. Image previews will not work.");
+            eprintln!("Install chafa:");
+            eprintln!("  macOS: brew install chafa");
+            eprintln!("  Windows: scoop install chafa");
+        }
 
         Ok(Self {
             config,
@@ -172,6 +179,7 @@ impl App {
             loading_spinner: LoadingSpinner::new(),
             toast: None,
             current_image_data,
+            current_sixel_cache: None,
             previous_screen: None,
             needs_preview_load: false,
             show_episode_list: false,
@@ -179,6 +187,17 @@ impl App {
             search_pending: false,
             last_keypress: Instant::now(),
         })
+    }
+
+    /// Check if chafa is available in the system PATH
+    fn is_chafa_available() -> bool {
+        Command::new("chafa")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
     }
 
     pub fn set_initial_search(&mut self, query: String) {
@@ -363,49 +382,59 @@ impl App {
         frame.render_widget(history_widget, area);
     }
 
-    fn draw_continue_watching_preview(&self,
+    fn draw_continue_watching_preview(&mut self,
         frame: &mut Frame,
         area: Rect,
     ) {
         if let Some(history) = self.continue_watching.get(self.continue_watching_selected) {
-            // Split into image and info - portrait orientation
+            let history_title = history.title.clone();
+            let history_cover_url = history.cover_url.clone();
+            let history_episode = history.episode_number;
+            let history_provider = history.provider.clone();
+
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Percentage(60), // Image area (portrait orientation)
-                    Constraint::Percentage(40), // Info area
+                    Constraint::Percentage(60),
+                    Constraint::Percentage(40),
                 ])
                 .margin(1)
                 .split(area);
 
-            // Show cover image using chafa if available
-            let image_block = Block::default()
-                .borders(Borders::ALL)
-                .title("Cover Image");
-            
-            if let Some(image_data) = &self.current_image_data {
-                // Try to render with chafa
-                Self::render_image_with_ascii(frame, chunks[0], image_data);
+            let has_image = self.current_image_data.as_ref().map(|d| !d.is_empty()).unwrap_or(false);
+
+            if has_image {
+                if let Some(image_data) = self.current_image_data.clone() {
+                    self.render_image_with_ratatui(frame, chunks[0], &image_data);
+                } else {
+                    let image_block = Block::default()
+                        .borders(Borders::ALL)
+                        .title("Cover Image");
+                    let image_text = "[Image error]";
+                    let image_widget = Paragraph::new(image_text)
+                        .alignment(Alignment::Center)
+                        .block(image_block);
+                    frame.render_widget(image_widget, chunks[0]);
+                }
             } else {
-                // Show placeholder
-                let image_text = if !history.cover_url.is_empty() {
+                let image_text = if !history_cover_url.is_empty() {
                     "[Loading image...]"
                 } else {
                     "[No Image Available]"
                 };
-                
+                let image_block = Block::default()
+                    .borders(Borders::ALL)
+                    .title("Cover Image");
                 let image_widget = Paragraph::new(image_text)
                     .alignment(Alignment::Center)
                     .block(image_block);
                 frame.render_widget(image_widget, chunks[0]);
             }
 
-            // Show info
             let mut info_lines: Vec<Line> = Vec::new();
             
-            // Title
             info_lines.push(Line::from(vec![Span::styled(
-                &history.title,
+                history_title,
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
@@ -413,15 +442,14 @@ impl App {
             
             info_lines.push(Line::from(""));
             
-            // Episode info
             info_lines.push(Line::from(vec![
                 Span::raw("Episode: "),
-                Span::styled(history.episode_number.to_string(), Style::default().fg(Color::Green)),
+                Span::styled(history_episode.to_string(), Style::default().fg(Color::Green)),
             ]));
             
             info_lines.push(Line::from(vec![
                 Span::raw("Provider: "),
-                Span::styled(&history.provider, Style::default().fg(Color::Yellow)),
+                Span::styled(&history_provider, Style::default().fg(Color::Yellow)),
             ]));
             
             info_lines.push(Line::from(""));
@@ -433,48 +461,102 @@ impl App {
         }
     }
 
-    fn render_image_with_ascii(frame: &mut Frame, area: Rect, image_data: &[u8]) {
-        use crate::image::AsciiRenderer;
-        use crate::ui::supports_images;
+    pub(crate) fn render_image_with_ratatui(&mut self, frame: &mut Frame, area: Rect, image_data: &[u8]) {
+        if image_data.is_empty() {
+            self.show_image_placeholder(frame, area, false);
+            return;
+        }
 
-        let supports_image = supports_images();
+        let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
+        let is_terminal = term_program == "Apple_Terminal";
 
-        if supports_image && !image_data.is_empty() {
-            // For terminals that support images, show a clean placeholder
-            let image_block = Block::default()
-                .borders(Borders::ALL)
-                .title("Cover Image");
+        if is_terminal {
+            tracing::warn!("Terminal.app does not support inline images.");
+            self.show_image_placeholder(frame, area, false);
+            return;
+        }
 
-            let placeholder = Paragraph::new("Press Enter to view image")
-                .alignment(Alignment::Center)
-                .style(Style::default().fg(Color::DarkGray))
-                .block(image_block);
+        let needs_update = match &self.current_image_data {
+            Some(prev_data) => prev_data != image_data,
+            None => true,
+        };
 
-            frame.render_widget(placeholder, area);
-        } else {
-            // Fallback to ASCII rendering for terminals without image support
-            let renderer = AsciiRenderer::new();
-            let width = area.width.saturating_sub(2) as u32;
-            let height = area.height.saturating_sub(2) as u32;
-
-            match renderer.render(image_data, width, height) {
-                Ok(rendered) => {
-                    let lines: Vec<Line> = rendered
-                        .lines()
-                        .take(area.height as usize)
-                        .map(|line| Line::from(line.to_string()))
-                        .collect();
-
-                    let image_widget = Paragraph::new(Text::from(lines));
-                    frame.render_widget(image_widget, area);
+        if needs_update {
+            let sixel = Self::convert_image_to_sixel(image_data, area.width as usize, area.height as usize);
+            match sixel {
+                Ok(sixel_output) => {
+                    self.current_sixel_cache = Some(sixel_output);
+                    self.current_image_data = Some(image_data.to_vec());
                 }
                 Err(e) => {
-                    let placeholder = Paragraph::new(format!("[Image error: {}]", e))
-                        .alignment(Alignment::Center);
-                    frame.render_widget(placeholder, area);
+                    tracing::warn!("Failed to convert image to Sixel: {}", e);
+                    self.show_image_placeholder(frame, area, true);
+                    return;
                 }
             }
         }
+
+        if let Some(ref sixel) = self.current_sixel_cache {
+            self.render_sixel_to_frame(frame, area, sixel);
+        } else {
+            self.show_image_placeholder(frame, area, false);
+        }
+    }
+
+    fn convert_image_to_sixel(image_data: &[u8], width: usize, height: usize) -> Result<String, Box<dyn std::error::Error>> {
+        let mut child = Command::new("chafa")
+            .args(&[
+                "--format", "sixel",
+                "--size", &format!("{}x{}", width, height),
+                "--center", "on",
+                "--colors", "256",
+                "-",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()?;
+
+        {
+            let stdin = child.stdin.as_mut().ok_or("Failed to open stdin")?;
+            stdin.write_all(image_data)?;
+        }
+
+        let output = child.wait_with_output()?;
+
+        if !output.status.success() {
+            return Err("chafa process failed".into());
+        }
+
+        Ok(String::from_utf8(output.stdout)?)
+    }
+
+    fn render_sixel_to_frame(&self, frame: &mut Frame, area: Rect, sixel: &str) {
+        let lines: Vec<&str> = sixel.lines().collect();
+        let max_lines = area.height as usize;
+        let max_width = area.width as usize;
+
+        for (i, line) in lines.iter().take(max_lines).enumerate() {
+            let truncated = if line.len() > max_width {
+                &line[..max_width]
+            } else {
+                line
+            };
+
+            let span = Span::raw(truncated.to_string());
+            let line_widget = Paragraph::new(span);
+            let line_area = Rect::new(area.x, area.y + i as u16, area.width, 1);
+            frame.render_widget(line_widget, line_area);
+        }
+    }
+
+    fn show_image_placeholder(&self, frame: &mut Frame, area: Rect, is_error: bool) {
+        let text = if is_error { "[Image error]" } else { "[No image]" };
+        let placeholder = Paragraph::new(text)
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::DarkGray))
+            .block(Block::default().borders(Borders::ALL).title("Cover Image"));
+        frame.render_widget(placeholder, area);
     }
 
     fn draw_search(&mut self, frame: &mut Frame) {
@@ -494,9 +576,8 @@ impl App {
         self.search_overlay.render(frame, main_layout[0], &[self.selected_source]);
 
         // Draw preview panel in right panel
-        let selected_anime = self.enriched_results.get(self.selected_index);
-        let image_data = self.current_image_data.as_ref().map(|d| std::slice::from_ref(d));
-        PreviewPanel::render(frame, main_layout[1], selected_anime, image_data);
+        let selected_anime = self.enriched_results.get(self.selected_index).cloned();
+        PreviewPanel::render(frame, main_layout[1], selected_anime.as_ref(), self);
     }
 
     fn draw_episode_select(&mut self, frame: &mut Frame) {
