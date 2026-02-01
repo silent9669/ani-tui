@@ -73,7 +73,33 @@ Or use the full path:
 $env:USERPROFILE\ani-tui\ani-tui.exe
 ```
 
+## Critical Requirements
+
+### Visual C++ Redistributable (REQUIRED)
+
+**ani-tui requires Microsoft Visual C++ Redistributable to run on Windows.**
+
+If ani-tui command does nothing or returns immediately:
+
+1. **Install Visual C++ Redistributable:**
+   ```powershell
+   winget install Microsoft.VCRedist.2015+.x64
+   ```
+   Or download from: https://aka.ms/vs/17/release/vc_redist.x64.exe
+
+2. **Restart your computer** (recommended)
+
+3. Try running ani-tui again
+
 ## Troubleshooting
+
+### "ani-tui" command does nothing (no output)
+
+This usually means you're missing Visual C++ Redistributable:
+
+1. Install it: https://aka.ms/vs/17/release/vc_redist.x64.exe
+2. Restart terminal
+3. Try again
 
 ### "ani-tui is not recognized as a command"
 

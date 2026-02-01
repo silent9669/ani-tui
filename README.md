@@ -69,7 +69,31 @@ ani-tui -q "Attack on Titan"
   - macOS: `brew install chafa`
   - Windows: Download from [hpjansson.org/chafa](https://hpjansson.org/chafa/)
 
+## Windows Requirements
+
+### Visual C++ Redistributable (CRITICAL)
+
+**Windows users MUST install Visual C++ Redistributable or ani-tui will not run!**
+
+If you type `ani-tui` and nothing happens:
+
+```powershell
+winget install Microsoft.VCRedist.2015+.x64
+```
+
+Or download: https://aka.ms/vs/17/release/vc_redist.x64.exe
+
+Then restart your terminal.
+
 ## Troubleshooting
+
+### Windows: "ani-tui" command does nothing (no output)
+
+**This means you're missing Visual C++ Redistributable!**
+
+1. Install it: https://aka.ms/vs/17/release/vc_redist.x64.exe
+2. Restart your computer
+3. Try again
 
 ### Windows: "ani-tui" command not found
 
