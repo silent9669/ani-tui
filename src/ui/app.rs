@@ -272,7 +272,11 @@ impl App {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
-            .constraints([Constraint::Length(5), Constraint::Min(0)])
+            .constraints([
+                Constraint::Length(5), // Welcome header
+                Constraint::Min(0),    // Continue watching section
+                Constraint::Length(1), // Status bar
+            ])
             .split(frame.size());
 
         // Welcome header
@@ -300,6 +304,12 @@ impl App {
                 .block(Block::default().borders(Borders::ALL).title("Continue Watching"));
             frame.render_widget(no_history, chunks[1]);
         }
+
+        // Status bar at bottom
+        let status_bar = Paragraph::new("↑/↓: Navigate | Enter: Resume | Shift+S: Search | Q: Quit")
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::Gray));
+        frame.render_widget(status_bar, chunks[2]);
     }
 
     fn draw_continue_watching(&self,
@@ -329,6 +339,7 @@ impl App {
                 Span::raw(prefix),
                 Span::styled(&history.title, title_style),
                 Span::raw(format!(" - Episode {}", history.episode_number)),
+                Span::styled("  *last watched", Style::default().fg(Color::DarkGray)),
             ]));
         }
 
@@ -363,10 +374,16 @@ impl App {
     fn draw_episode_select(&mut self, frame: &mut Frame) {
         let area = frame.size();
 
-        // Get anime title
-        let title = self.selected_anime.as_ref()
-            .map(|a| a.base.title.clone())
-            .unwrap_or_else(|| "Select Episode".to_string());
+        // Get anime title and check for last watched episode
+        let (title, last_watched_ep) = self.selected_anime.as_ref()
+            .map(|a| {
+                let anime_id = format!("{}:{}", a.base.provider, a.base.id);
+                let last_ep = self.continue_watching.iter()
+                    .find(|h| h.anime_id == anime_id)
+                    .map(|h| h.episode_number);
+                (a.base.title.clone(), last_ep)
+            })
+            .unwrap_or_else(|| ("Select Episode".to_string(), None));
 
         // Split area into info (top) and episodes (bottom)
         let chunks = Layout::default()
@@ -390,14 +407,18 @@ impl App {
         
         for (idx, episode) in self.episodes.iter().enumerate() {
             let is_selected = idx == self.episode_list_scroll;
+            let is_last_watched = last_watched_ep.map(|ep| ep == episode.number).unwrap_or(false);
             
             let prefix = if is_selected { "▶ " } else { "  " };
             let ep_title = episode.title.as_ref()
                 .map(|t| t.clone())
                 .unwrap_or_else(|| format!("Episode {}", episode.number));
             
+            // Use yellow color for last watched episodes
             let style = if is_selected {
                 Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            } else if is_last_watched {
+                Style::default().fg(Color::Yellow)
             } else {
                 Style::default()
             };
@@ -409,10 +430,17 @@ impl App {
                 format!("Episode {}: {}", episode.number, ep_title)
             };
             
-            lines.push(Line::from(vec![
+            let mut spans = vec![
                 Span::raw(prefix),
                 Span::styled(display_text, style),
-            ]));
+            ];
+            
+            // Add "*last watched" indicator if this is the last watched episode
+            if is_last_watched {
+                spans.push(Span::styled("  *last watched", Style::default().fg(Color::DarkGray)));
+            }
+            
+            lines.push(Line::from(spans));
         }
 
         if self.episodes.is_empty() {

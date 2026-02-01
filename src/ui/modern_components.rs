@@ -32,14 +32,14 @@ impl SplashScreen {
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect) {
-        // Create centered layout
+        // Create centered layout - cleaner with less spacing
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Percentage(40),
-                Constraint::Length(3), // Title
+                Constraint::Percentage(35),
+                Constraint::Length(1), // Version tag
+                Constraint::Length(1), // Spacing
                 Constraint::Length(1), // Loading bar
-                Constraint::Length(1), // Loading spinner
                 Constraint::Min(0),
             ])
             .split(area);
@@ -50,14 +50,16 @@ impl SplashScreen {
         // Blue color with fade-in
         let blue_intensity = (255.0 * fade_progress) as u8;
         let title_color = Color::Rgb(0, 100, blue_intensity);
-        let title_style = Style::default()
+
+        // Version tag with fade-in effect
+        let version_style = Style::default()
             .fg(title_color)
             .add_modifier(Modifier::BOLD);
 
-        let title = Paragraph::new("ANI-TUI")
+        let version_text = Paragraph::new("v3.0.0")
             .alignment(Alignment::Center)
-            .style(title_style);
-        frame.render_widget(title, chunks[1]);
+            .style(version_style);
+        frame.render_widget(version_text, chunks[1]);
 
         // Loading bar
         let bar_width = 30;
@@ -68,12 +70,7 @@ impl SplashScreen {
         let loading_bar = Paragraph::new(bar_text)
             .alignment(Alignment::Center)
             .style(Style::default().fg(bar_color));
-        frame.render_widget(loading_bar, chunks[2]);
-
-        // Loading spinner
-        let spinner_line = self.loading_spinner.render();
-        let spinner_text = Paragraph::new(spinner_line).alignment(Alignment::Center);
-        frame.render_widget(spinner_text, chunks[3]);
+        frame.render_widget(loading_bar, chunks[3]);
     }
 
     fn get_loading_bar_color(&self) -> Color {
@@ -317,10 +314,21 @@ impl SearchOverlay {
             .direction(ratatui::layout::Direction::Vertical)
             .margin(1)
             .constraints([
+                ratatui::layout::Constraint::Length(2), // Caption
                 ratatui::layout::Constraint::Length(3), // Search input
                 ratatui::layout::Constraint::Min(0),    // Results
             ])
             .split(area);
+
+        // Centered caption at top
+        let caption = Paragraph::new("Search for Anime")
+            .alignment(Alignment::Center)
+            .style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            );
+        frame.render_widget(caption, layout[0]);
 
         // Search input
         let search_block = Block::default()
@@ -334,7 +342,7 @@ impl SearchOverlay {
         };
 
         let search_input = Paragraph::new(search_text).block(search_block);
-        frame.render_widget(search_input, layout[0]);
+        frame.render_widget(search_input, layout[1]);
 
         // Results list
         let results_block = Block::default().borders(Borders::ALL).title(format!(
@@ -385,7 +393,7 @@ impl SearchOverlay {
             .block(results_block)
             .wrap(Wrap { trim: true });
 
-        frame.render_widget(results_list, layout[1]);
+        frame.render_widget(results_list, layout[2]);
     }
 }
 
@@ -398,12 +406,12 @@ impl SourceSelectModal {
         sources: &[(String, crate::providers::Language, bool)], // (name, lang, enabled)
         selected: usize,
     ) {
-        // Create centered layout
+        // Create centered layout - 50% width, 40% height
         let vertical_layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Percentage(30),
-                Constraint::Min(10),
+                Constraint::Percentage(40),
                 Constraint::Percentage(30),
             ])
             .split(area);
@@ -411,15 +419,33 @@ impl SourceSelectModal {
         let horizontal_layout = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Percentage(20),
-                Constraint::Min(40),
-                Constraint::Percentage(20),
+                Constraint::Percentage(25),
+                Constraint::Percentage(50),
+                Constraint::Percentage(25),
             ])
             .split(vertical_layout[1]);
 
         let modal_area = horizontal_layout[1];
 
-        // Caption at the top
+        // Clear the area behind the modal
+        frame.render_widget(ratatui::widgets::Clear, modal_area);
+
+        // Block with centered title
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title("Select Source (Enter to confirm)");
+
+        // Split modal area for caption and content
+        let modal_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(2), // Caption
+                Constraint::Min(0),    // Content
+            ])
+            .margin(1)
+            .split(modal_area);
+
+        // Caption centered at top
         let caption = Paragraph::new("Select ONE subtitle language:")
             .alignment(Alignment::Center)
             .style(
@@ -427,18 +453,7 @@ impl SourceSelectModal {
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             );
-
-        // Split modal area for caption and content
-        let modal_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(2), Constraint::Min(0)])
-            .split(modal_area);
-
         frame.render_widget(caption, modal_chunks[0]);
-
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title("Select Source (Enter to confirm)");
 
         let mut lines: Vec<Line> = Vec::new();
 
