@@ -8,7 +8,7 @@ A Netflix-inspired TUI (Terminal User Interface) for streaming anime with suppor
 
 ```bash
 # Option 1: Install script (recommended)
-curl -fsSL https://raw.githubusercontent.com/silent9669/ani-tui/main/packaging/macos/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/silent9669/ani-tui/master/packaging/macos/install.sh | bash
 
 # Option 2: Homebrew
 brew tap silent9669/tap
@@ -22,7 +22,7 @@ brew install ani-tui
 Copy and paste this entire command into PowerShell:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr -useb https://raw.githubusercontent.com/silent9669/ani-tui/main/packaging/windows/install-easy.ps1 | iex"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr -useb https://raw.githubusercontent.com/silent9669/ani-tui/master/packaging/windows/install-easy.ps1 | iex"
 ```
 
 **Option 2: Manual Download**
@@ -42,7 +42,7 @@ scoop install ani-tui
 ### Linux
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/silent9669/ani-tui/main/packaging/linux/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/silent9669/ani-tui/master/packaging/linux/install.sh | bash
 ```
 
 ## Usage
