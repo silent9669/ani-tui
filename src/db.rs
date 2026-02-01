@@ -206,6 +206,17 @@ impl Database {
         Ok(histories)
     }
 
+    pub async fn remove_from_continue_watching(&self, anime_id: &str) -> Result<()> {
+        let conn = self.conn.lock().await;
+        
+        conn.execute(
+            "DELETE FROM watch_history WHERE anime_id = ?1",
+            params![anime_id],
+        )?;
+        
+        Ok(())
+    }
+
     pub async fn cache_image(&self, id: &str, url: &str, data: &[u8],
     ) -> Result<()> {
         let conn = self.conn.lock().await;

@@ -122,9 +122,16 @@ impl PreviewPanel {
                 .map(|d| !d.is_empty())
                 .unwrap_or(false);
 
-            // Image rendering disabled to prevent UI corruption
-            // Show placeholder with cover URL info instead
-            Self::render_image_placeholder(frame, chunks[0], has_image);
+            // Try to render image using chafa if available
+            if has_image {
+                if let Some(data) = image_data.and_then(|d| d.first()) {
+                    Self::render_image_with_chafa(frame, chunks[0], data);
+                } else {
+                    Self::render_image_placeholder(frame, chunks[0], true);
+                }
+            } else {
+                Self::render_image_placeholder(frame, chunks[0], false);
+            }
 
             // Render info text
             let mut lines: Vec<Line> = Vec::new();
@@ -300,6 +307,38 @@ impl PreviewPanel {
 
         let image_widget = Paragraph::new(Text::from(image_lines)).alignment(Alignment::Center);
         frame.render_widget(image_widget, area);
+    }
+
+    fn render_image_with_chafa(frame: &mut Frame, area: Rect, image_data: &[u8]) {
+        use crate::image::ChafaRenderer;
+
+        // Only try chafa if it's available
+        if !ChafaRenderer::is_available() {
+            Self::render_image_placeholder(frame, area, true);
+            return;
+        }
+
+        let renderer = ChafaRenderer::new();
+        let width = area.width as u32;
+        let height = area.height as u32;
+
+        match renderer.render(image_data, width, height) {
+            Ok(rendered) => {
+                // Split rendered text into lines
+                let lines: Vec<Line> = rendered
+                    .lines()
+                    .take(area.height as usize)
+                    .map(|line| Line::from(line.to_string()))
+                    .collect();
+
+                let image_widget = Paragraph::new(Text::from(lines));
+                frame.render_widget(image_widget, area);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to render image with chafa: {}", e);
+                Self::render_image_placeholder(frame, area, true);
+            }
+        }
     }
 }
 

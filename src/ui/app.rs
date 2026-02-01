@@ -269,59 +269,46 @@ impl App {
     }
 
     fn draw_home(&mut self, frame: &mut Frame) {
-        let chunks = Layout::default()
+        let main_chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
             .constraints([
-                Constraint::Length(5), // Welcome header
-                Constraint::Min(0),    // Continue watching section
+                Constraint::Min(0),    // Content area (full height)
                 Constraint::Length(1), // Status bar
             ])
             .split(frame.size());
 
-        // Welcome header
-        let welcome_text = Text::from(vec![
-            Line::from(vec![Span::styled(
-                "Welcome to ani-tui!\n",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )]),
-        ]);
-
-        let welcome = Paragraph::new(welcome_text)
-            .alignment(Alignment::Center)
-            .block(Block::default().borders(Borders::BOTTOM));
-
-        frame.render_widget(welcome, chunks[0]);
-
-        // Continue watching section
+        // Content area - split into Continue Watching and Preview
         if !self.continue_watching.is_empty() {
-            self.draw_continue_watching(frame, chunks[1]);
+            let content_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(main_chunks[0]);
+            
+            // Continue watching list
+            self.draw_continue_watching(frame, content_chunks[0]);
+
+            // Preview panel for selected item
+            self.draw_continue_watching_preview(frame, content_chunks[1]);
         } else {
-            let no_history = Paragraph::new("No watch history yet.\nStart watching to see your progress here!")
+            let no_history = Paragraph::new("No watch history yet.\nStart watching to see your progress here!\n\nPress Shift+S to search for anime.")
                 .alignment(Alignment::Center)
-                .block(Block::default().borders(Borders::ALL).title("Continue Watching"));
-            frame.render_widget(no_history, chunks[1]);
+                .block(Block::default().borders(Borders::ALL));
+            frame.render_widget(no_history, main_chunks[0]);
         }
 
         // Status bar at bottom
-        let status_bar = Paragraph::new("↑/↓: Navigate | Enter: Resume | Shift+S: Search | Q: Quit")
+        let status_bar = Paragraph::new("↑/↓: Navigate | Enter: Resume | Shift+D: Remove | Shift+S: Search | Q: Quit")
             .alignment(Alignment::Center)
             .style(Style::default().fg(Color::Gray));
-        frame.render_widget(status_bar, chunks[2]);
+        frame.render_widget(status_bar, main_chunks[1]);
     }
 
     fn draw_continue_watching(&self,
         frame: &mut Frame,
         area: Rect,
     ) {
-        let mut history_lines: Vec<Line> = vec![Line::from(vec![Span::styled(
-            "Continue Watching\n",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )])];
+        let mut history_lines: Vec<Line> = Vec::new();
 
         for (idx, history) in self.continue_watching.iter().take(5).enumerate() {
             let is_selected = idx == self.continue_watching_selected;
@@ -347,6 +334,112 @@ impl App {
             .block(Block::default().borders(Borders::ALL).title("Continue Watching"));
 
         frame.render_widget(history_widget, area);
+    }
+
+    fn draw_continue_watching_preview(&self,
+        frame: &mut Frame,
+        area: Rect,
+    ) {
+        if let Some(history) = self.continue_watching.get(self.continue_watching_selected) {
+            // Split into image and info
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Percentage(50), // Larger image area
+                    Constraint::Percentage(50), // Info area
+                ])
+                .margin(1)
+                .split(area);
+
+            // Show cover image using chafa if available
+            let image_block = Block::default()
+                .borders(Borders::ALL)
+                .title("Cover Image");
+            
+            if let Some(image_data) = &self.current_image_data {
+                // Try to render with chafa
+                Self::render_image_with_chafa(frame, chunks[0], image_data);
+            } else {
+                // Show placeholder
+                let image_text = if !history.cover_url.is_empty() {
+                    "[Loading image...]"
+                } else {
+                    "[No Image Available]"
+                };
+                
+                let image_widget = Paragraph::new(image_text)
+                    .alignment(Alignment::Center)
+                    .block(image_block);
+                frame.render_widget(image_widget, chunks[0]);
+            }
+
+            // Show info
+            let mut info_lines: Vec<Line> = Vec::new();
+            
+            // Title
+            info_lines.push(Line::from(vec![Span::styled(
+                &history.title,
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )]));
+            
+            info_lines.push(Line::from(""));
+            
+            // Episode info
+            info_lines.push(Line::from(vec![
+                Span::raw("Episode: "),
+                Span::styled(history.episode_number.to_string(), Style::default().fg(Color::Green)),
+            ]));
+            
+            info_lines.push(Line::from(vec![
+                Span::raw("Provider: "),
+                Span::styled(&history.provider, Style::default().fg(Color::Yellow)),
+            ]));
+            
+            info_lines.push(Line::from(""));
+            info_lines.push(Line::from("Press Enter to resume watching"));
+
+            let info_widget = Paragraph::new(Text::from(info_lines))
+                .block(Block::default().borders(Borders::ALL).title("Preview"));
+            frame.render_widget(info_widget, chunks[1]);
+        }
+    }
+
+    fn render_image_with_chafa(frame: &mut Frame, area: Rect, image_data: &[u8]) {
+        use crate::image::ChafaRenderer;
+        
+        // Only try chafa if it's available
+        if !ChafaRenderer::is_available() {
+            let placeholder = Paragraph::new("[chafa not installed]")
+                .alignment(Alignment::Center);
+            frame.render_widget(placeholder, area);
+            return;
+        }
+
+        let renderer = ChafaRenderer::new();
+        let width = area.width as u32;
+        let height = area.height as u32;
+
+        match renderer.render(image_data, width, height) {
+            Ok(rendered) => {
+                // Split rendered text into lines
+                let lines: Vec<Line> = rendered
+                    .lines()
+                    .take(area.height as usize)
+                    .map(|line| Line::from(line.to_string()))
+                    .collect();
+                
+                let image_widget = Paragraph::new(Text::from(lines));
+                frame.render_widget(image_widget, area);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to render image with chafa: {}", e);
+                let placeholder = Paragraph::new("[Image render failed]")
+                    .alignment(Alignment::Center);
+                frame.render_widget(placeholder, area);
+            }
+        }
     }
 
     fn draw_search(&mut self, frame: &mut Frame) {
@@ -752,18 +845,41 @@ impl App {
             KeyCode::Up => {
                 if self.continue_watching_selected > 0 {
                     self.continue_watching_selected -= 1;
+                    self.load_continue_watching_image().await;
                 }
             }
             KeyCode::Down => {
                 let max_idx = self.continue_watching.len().saturating_sub(1);
                 if self.continue_watching_selected < max_idx {
                     self.continue_watching_selected += 1;
+                    self.load_continue_watching_image().await;
                 }
             }
             KeyCode::Enter => {
                 // Resume the selected anime
                 if let Some(history) = self.continue_watching.get(self.continue_watching_selected).cloned() {
                     self.resume_watching(history).await?;
+                }
+            }
+            KeyCode::Char('D') => {
+                // Remove from continue watching
+                if !self.continue_watching.is_empty() && self.continue_watching_selected < self.continue_watching.len() {
+                    let history = &self.continue_watching[self.continue_watching_selected];
+                    let anime_id = history.anime_id.clone();
+                    let title = history.title.clone();
+                    
+                    // Remove from database
+                    let _ = self.db.remove_from_continue_watching(&anime_id).await;
+                    
+                    // Remove from local list
+                    self.continue_watching.remove(self.continue_watching_selected);
+                    
+                    // Adjust selection
+                    if self.continue_watching_selected >= self.continue_watching.len() && self.continue_watching_selected > 0 {
+                        self.continue_watching_selected -= 1;
+                    }
+                    
+                    self.show_toast(format!("Removed '{}' from Continue Watching", title), 2);
                 }
             }
             _ => {}
@@ -800,6 +916,28 @@ impl App {
         }
         
         Ok(())
+    }
+
+    async fn load_continue_watching_image(&mut self) {
+        if let Some(history) = self.continue_watching.get(self.continue_watching_selected) {
+            if !history.cover_url.is_empty() {
+                let image_id = format!("continue_watching_{}", history.anime_id);
+                let cover_url = history.cover_url.clone();
+                
+                // Try to get image from cache or download it
+                match self.image_pipeline.request_download(image_id, cover_url).await {
+                    Ok(data) => {
+                        self.current_image_data = Some(data);
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to load cover image: {}", e);
+                        self.current_image_data = None;
+                    }
+                }
+            } else {
+                self.current_image_data = None;
+            }
+        }
     }
 
     async fn handle_search_key(
@@ -1251,6 +1389,11 @@ impl App {
         // Check mpv status
         if self.current_screen == Screen::Player {
             self.player_controller.check_mpv_status();
+        }
+
+        // Load initial image for Continue Watching when entering Home screen
+        if self.current_screen == Screen::Home && !self.continue_watching.is_empty() && self.current_image_data.is_none() {
+            self.load_continue_watching_image().await;
         }
 
         // Smart auto-search with debounce
