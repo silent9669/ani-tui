@@ -52,6 +52,10 @@ tracing-subscriber = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
 url = "2.5"
 regex = "1.10"
+image_ascii = "0.1"
+
+# Image encoding
+base64 = "0.22"
 
 [profile.release]
 opt-level = 3

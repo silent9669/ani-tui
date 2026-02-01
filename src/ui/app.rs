@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::db::Database;
-use crate::image::{ChafaRenderer, ImagePipeline};
+use crate::image::{AsciiRenderer, ImagePipeline};
 use crate::metadata::{EnrichedAnime, MetadataCache};
 use crate::player::Player;
 use crate::providers::{AnimeProvider, Episode, Language, ProviderRegistry};
@@ -52,7 +52,7 @@ pub struct App {
     image_pipeline: ImagePipeline,
     player_controller: PlayerController,
     #[allow(dead_code)]
-    chafa_renderer: ChafaRenderer,
+    chafa_renderer: AsciiRenderer,
 
     // Source selection - only one source at a time
     selected_source: Language,
@@ -82,6 +82,12 @@ pub struct App {
 
     // Image cache for current preview
     current_image_data: Option<Vec<u8>>,
+
+    // Track previous screen for navigation
+    previous_screen: Option<Screen>,
+
+    // Trigger preview load when entering search
+    needs_preview_load: bool,
 
     // Episode list modal in player
     show_episode_list: bool,
@@ -117,7 +123,9 @@ impl App {
             if !first.cover_url.is_empty() {
                 let image_id = format!("continue_watching_{}", first.anime_id);
                 match image_pipeline.request_download(image_id, first.cover_url.clone()).await {
-                    Ok(data) => current_image_data = Some(data),
+                    Ok(data) => {
+                        current_image_data = Some(data);
+                    }
                     Err(e) => tracing::warn!("Failed to load first cover image: {}", e),
                 }
             }
@@ -134,13 +142,8 @@ impl App {
         // Database already has internal locking
         let metadata_cache = MetadataCache::new(db.clone());
 
-        // Check if chafa is available
-        if !ChafaRenderer::is_available() {
-            eprintln!("Warning: chafa is not installed. Image previews will not work.");
-            eprintln!("Install chafa:");
-            eprintln!("  macOS: brew install chafa");
-            eprintln!("  Windows: scoop install chafa");
-        }
+        // AsciiRenderer is always available (pure Rust crate)
+        // No external dependencies required
 
         Ok(Self {
             config,
@@ -154,7 +157,7 @@ impl App {
             metadata_cache,
             image_pipeline,
             player_controller: PlayerController::new(),
-            chafa_renderer: ChafaRenderer::new(),
+            chafa_renderer: AsciiRenderer::new(),
             selected_source,
             selected_source_idx,
             show_source_modal: false,
@@ -169,6 +172,8 @@ impl App {
             loading_spinner: LoadingSpinner::new(),
             toast: None,
             current_image_data,
+            previous_screen: None,
+            needs_preview_load: false,
             show_episode_list: false,
             episode_list_scroll: 0,
             search_pending: false,
@@ -222,6 +227,7 @@ impl App {
                         if key.code == KeyCode::Char('S') {
                             if self.current_screen == Screen::Home {
                                 self.current_screen = Screen::Search;
+                                self.needs_preview_load = true;
                                 continue;
                             }
                         }
@@ -319,7 +325,7 @@ impl App {
         }
 
         // Status bar at bottom
-        let status_bar = Paragraph::new("↑/↓: Navigate | Enter: Resume | Shift+D: Remove | Shift+S: Search | Q: Quit")
+        let status_bar = Paragraph::new("↑/↓: Navigate | Enter: Resume | Shift+D: Remove | Shift+S: Search | ESC: Quit")
             .alignment(Alignment::Center)
             .style(Style::default().fg(Color::Gray));
         frame.render_widget(status_bar, main_chunks[1]);
@@ -379,7 +385,7 @@ impl App {
             
             if let Some(image_data) = &self.current_image_data {
                 // Try to render with chafa
-                Self::render_image_with_chafa(frame, chunks[0], image_data);
+                Self::render_image_with_ascii(frame, chunks[0], image_data);
             } else {
                 // Show placeholder
                 let image_text = if !history.cover_url.is_empty() {
@@ -427,38 +433,46 @@ impl App {
         }
     }
 
-    fn render_image_with_chafa(frame: &mut Frame, area: Rect, image_data: &[u8]) {
-        use crate::image::ChafaRenderer;
-        
-        // Only try chafa if it's available
-        if !ChafaRenderer::is_available() {
-            let placeholder = Paragraph::new("[chafa not installed]")
-                .alignment(Alignment::Center);
+    fn render_image_with_ascii(frame: &mut Frame, area: Rect, image_data: &[u8]) {
+        use crate::image::AsciiRenderer;
+        use crate::ui::supports_images;
+
+        let supports_image = supports_images();
+
+        if supports_image && !image_data.is_empty() {
+            // For terminals that support images, show a clean placeholder
+            let image_block = Block::default()
+                .borders(Borders::ALL)
+                .title("Cover Image");
+
+            let placeholder = Paragraph::new("Press Enter to view image")
+                .alignment(Alignment::Center)
+                .style(Style::default().fg(Color::DarkGray))
+                .block(image_block);
+
             frame.render_widget(placeholder, area);
-            return;
-        }
+        } else {
+            // Fallback to ASCII rendering for terminals without image support
+            let renderer = AsciiRenderer::new();
+            let width = area.width.saturating_sub(2) as u32;
+            let height = area.height.saturating_sub(2) as u32;
 
-        let renderer = ChafaRenderer::new();
-        let width = area.width as u32;
-        let height = area.height as u32;
+            match renderer.render(image_data, width, height) {
+                Ok(rendered) => {
+                    let lines: Vec<Line> = rendered
+                        .lines()
+                        .take(area.height as usize)
+                        .map(|line| Line::from(line.to_string()))
+                        .collect();
 
-        match renderer.render(image_data, width, height) {
-            Ok(rendered) => {
-                // Split rendered text into lines
-                let lines: Vec<Line> = rendered
-                    .lines()
-                    .take(area.height as usize)
-                    .map(|line| Line::from(line.to_string()))
-                    .collect();
-                
-                let image_widget = Paragraph::new(Text::from(lines));
-                frame.render_widget(image_widget, area);
-            }
-            Err(e) => {
-                tracing::warn!("Failed to render image with chafa: {}", e);
-                let placeholder = Paragraph::new("[Image render failed]")
-                    .alignment(Alignment::Center);
-                frame.render_widget(placeholder, area);
+                    let image_widget = Paragraph::new(Text::from(lines));
+                    frame.render_widget(image_widget, area);
+                }
+                Err(e) => {
+                    let placeholder = Paragraph::new(format!("[Image error: {}]", e))
+                        .alignment(Alignment::Center);
+                    frame.render_widget(placeholder, area);
+                }
             }
         }
     }
@@ -776,8 +790,9 @@ impl App {
     ) -> Result<()> {
         match key {
             KeyCode::Esc | KeyCode::Char('b') => {
-                // Go back to search
-                self.current_screen = Screen::Search;
+                // Go back to previous screen (Dashboard or Search)
+                let target = self.previous_screen.take().unwrap_or(Screen::Home);
+                self.current_screen = target;
                 self.episodes.clear();
             }
             KeyCode::Up => {
@@ -860,7 +875,7 @@ impl App {
         key: KeyCode,
     ) -> Result<()> {
         match key {
-            KeyCode::Char('q') | KeyCode::Char('Q') => {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('Q') => {
                 self.should_quit = true;
             }
             KeyCode::Up => {
@@ -944,7 +959,7 @@ impl App {
             if !history.cover_url.is_empty() {
                 let image_id = format!("continue_watching_{}", history.anime_id);
                 let cover_url = history.cover_url.clone();
-                
+
                 // Try to get image from cache or download it
                 match self.image_pipeline.request_download(image_id, cover_url).await {
                     Ok(data) => {
@@ -1088,7 +1103,7 @@ impl App {
                     }
                     KeyCode::Char('b') => {
                         self.save_watch_history().await;
-                        self.current_screen = Screen::Search;
+                        self.current_screen = Screen::Home;
                         self.player_controller = PlayerController::new();
                     }
                     _ => {}
@@ -1098,7 +1113,7 @@ impl App {
                 match key {
                     KeyCode::Esc | KeyCode::Char('b') => {
                         self.save_watch_history().await;
-                        self.current_screen = Screen::Search;
+                        self.current_screen = Screen::Home;
                         self.player_controller = PlayerController::new();
                     }
                     KeyCode::Enter => {
@@ -1107,7 +1122,7 @@ impl App {
                             self.player_controller.play_next_episode();
                             self.play_current_episode().await;
                         } else {
-                            self.current_screen = Screen::Search;
+                            self.current_screen = Screen::Home;
                             self.player_controller = PlayerController::new();
                         }
                     }
@@ -1182,7 +1197,7 @@ impl App {
                 self.show_toast("Download not yet implemented".to_string(), 3);
             }
             ControlAction::BackToMenu => {
-                self.current_screen = Screen::Search;
+                self.current_screen = Screen::Home;
                 self.player_controller = PlayerController::new();
             }
         }
@@ -1311,6 +1326,8 @@ impl App {
                         self.episode_list_scroll = last_watched_ep
                             .and_then(|ep| self.episodes.iter().position(|e| e.number == ep))
                             .unwrap_or(0);
+                        // Save current screen for back navigation
+                        self.previous_screen = Some(self.current_screen);
                         self.current_screen = Screen::EpisodeSelect;
                         self.show_toast(format!("Found {} episodes", self.episodes.len()), 2);
                     } else {
@@ -1423,6 +1440,12 @@ impl App {
         // Load initial image for Continue Watching when entering Home screen
         if self.current_screen == Screen::Home && !self.continue_watching.is_empty() && self.current_image_data.is_none() {
             self.load_continue_watching_image().await;
+        }
+
+        // Load preview image when entering search mode
+        if self.needs_preview_load && self.current_screen == Screen::Search {
+            self.needs_preview_load = false;
+            self.load_preview().await;
         }
 
         // Smart auto-search with debounce

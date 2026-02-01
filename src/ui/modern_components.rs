@@ -125,7 +125,7 @@ impl PreviewPanel {
             // Try to render image using chafa if available
             if has_image {
                 if let Some(data) = image_data.and_then(|d| d.first()) {
-                    Self::render_image_with_chafa(frame, chunks[0], data);
+                    Self::render_image_with_ascii(frame, chunks[0], data);
                 } else {
                     Self::render_image_placeholder(frame, chunks[0], true);
                 }
@@ -309,34 +309,42 @@ impl PreviewPanel {
         frame.render_widget(image_widget, area);
     }
 
-    fn render_image_with_chafa(frame: &mut Frame, area: Rect, image_data: &[u8]) {
-        use crate::image::ChafaRenderer;
+    fn render_image_with_ascii(frame: &mut Frame, area: Rect, image_data: &[u8]) {
+        use crate::image::AsciiRenderer;
+        use crate::ui::supports_images;
 
-        // Only try chafa if it's available
-        if !ChafaRenderer::is_available() {
-            Self::render_image_placeholder(frame, area, true);
-            return;
-        }
+        let supports_image = supports_images();
 
-        let renderer = ChafaRenderer::new();
-        let width = area.width as u32;
-        let height = area.height as u32;
+        if supports_image && !image_data.is_empty() {
+            // For terminals that support images, show a clean placeholder
+            // The actual image will be displayed via escape sequences when needed
+            let placeholder = Paragraph::new("Press Enter to view image")
+                .alignment(Alignment::Center)
+                .style(Style::default().fg(Color::DarkGray))
+                .block(Block::default().borders(Borders::ALL).title("Cover Image"));
 
-        match renderer.render(image_data, width, height) {
-            Ok(rendered) => {
-                // Split rendered text into lines
-                let lines: Vec<Line> = rendered
-                    .lines()
-                    .take(area.height as usize)
-                    .map(|line| Line::from(line.to_string()))
-                    .collect();
+            frame.render_widget(placeholder, area);
+        } else {
+            // Fallback to ASCII rendering for terminals without image support
+            let renderer = AsciiRenderer::new();
+            let width = area.width.saturating_sub(2) as u32;
+            let height = area.height.saturating_sub(2) as u32;
 
-                let image_widget = Paragraph::new(Text::from(lines));
-                frame.render_widget(image_widget, area);
-            }
-            Err(e) => {
-                tracing::warn!("Failed to render image with chafa: {}", e);
-                Self::render_image_placeholder(frame, area, true);
+            match renderer.render(image_data, width, height) {
+                Ok(rendered) => {
+                    let lines: Vec<Line> = rendered
+                        .lines()
+                        .take(area.height as usize)
+                        .map(|line| Line::from(line.to_string()))
+                        .collect();
+
+                    let image_widget = Paragraph::new(Text::from(lines));
+                    frame.render_widget(image_widget, area);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to render image: {}", e);
+                    Self::render_image_placeholder(frame, area, true);
+                }
             }
         }
     }
@@ -396,7 +404,7 @@ impl SearchOverlay {
 
         // Results list
         let results_block = Block::default().borders(Borders::ALL).title(format!(
-            "Results ({}) - Shift+C: change source | Shift+B: back home",
+            "Results ({}) - Shift+C: change source | ESC: back home",
             self.results.len()
         ));
 

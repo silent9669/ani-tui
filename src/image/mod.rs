@@ -29,76 +29,55 @@ struct DownloadRequest {
     result_tx: mpsc::Sender<Result<Vec<u8>>>,
 }
 
-pub struct ChafaRenderer;
+pub struct AsciiRenderer;
 
-impl ChafaRenderer {
+impl AsciiRenderer {
     pub fn new() -> Self {
         Self
     }
 
     pub fn is_available() -> bool {
-        std::process::Command::new("chafa")
-            .arg("--version")
-            .output()
-            .map(|output| output.status.success())
-            .unwrap_or(false)
+        // image_ascii is always available since it's a Rust crate
+        true
     }
 
-    pub fn render(&self,
-        image_data: &[u8],
-        width: u32,
-        height: u32,
-    ) -> Result<String> {
+    pub fn render(&self, image_data: &[u8], _width: u32, _height: u32) -> Result<String> {
         // Validate image data
         if image_data.is_empty() {
             anyhow::bail!("Image data is empty");
         }
 
-        // Log image info for debugging
-        tracing::debug!("Rendering image: {} bytes, {}x{}", image_data.len(), width, height);
+        // Check for valid image magic bytes
+        let is_valid_image = image_data.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) // PNG
+            || image_data.starts_with(&[0xFF, 0xD8, 0xFF]) // JPEG
+            || image_data.starts_with(&[0x52, 0x49, 0x46, 0x46]) // WEBP
+            || image_data.starts_with(&[0x47, 0x49, 0x46, 0x38, 0x37, 0x61]) // GIF87a
+            || image_data.starts_with(&[0x47, 0x49, 0x46, 0x38, 0x39, 0x61]) // GIF89a
+            || image_data.starts_with(&[0x42, 0x4D]) // BMP
+            || image_data.starts_with(&[0x49, 0x49, 0x2A, 0x00]) // TIFF little-endian
+            || image_data.starts_with(&[0x4D, 0x4D, 0x00, 0x2A]); // TIFF big-endian
 
-        use std::io::Write;
-        use std::process::{Command, Stdio};
-
-        // Use simpler, more compatible chafa options
-        let mut child = Command::new("chafa")
-            .args([
-                "--size",
-                &format!("{}x{}", width, height),
-                "--format", "symbols",
-                "--symbols", "block",
-                "--fg-only",
-                "-",
-            ])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .context("Failed to start chafa. Make sure chafa is installed:")?;
-
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(image_data)?;
+        if !is_valid_image {
+            tracing::warn!("Invalid image format, {} bytes", image_data.len());
+            anyhow::bail!("Invalid image format");
         }
 
-        let output = child
-            .wait_with_output()
-            .context("Failed to render image with chafa")?;
+        // Use image_ascii for in-memory image rendering
+        // First, parse the image data using the image crate
+        let img = image::load_from_memory(image_data)
+            .context("Failed to parse image data")?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            tracing::error!("chafa failed: {}", stderr);
-            anyhow::bail!("chafa failed: {}", stderr);
-        }
+        // Create ASCII text generator
+        let generator = image_ascii::TextGenerator::new(&img);
 
-        let result = String::from_utf8(output.stdout)
-            .context("chafa output is not valid UTF-8")?;
-        
-        tracing::debug!("Chafa rendered {} characters", result.len());
-        Ok(result)
+        // Generate ASCII art
+        let ascii = generator.generate();
+
+        Ok(ascii)
     }
 
     pub fn render_placeholder(_width: u32, height: u32) -> String {
-        let lines = vec!["[Loading image...]".to_string(); height as usize];
+        let lines = vec!["[No image]".to_string(); (height as usize).min(10)];
         lines.join("\n")
     }
 }
@@ -300,7 +279,7 @@ impl ImagePipeline {
     }
 }
 
-impl Default for ChafaRenderer {
+impl Default for AsciiRenderer {
     fn default() -> Self {
         Self::new()
     }
