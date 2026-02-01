@@ -104,6 +104,9 @@ jobs:
         files: |
           artifacts/**/*.zip
           artifacts/**/*.tar.gz
+          packaging/windows/install-complete.ps1
+          packaging/windows/install.ps1
+          packaging/windows/install-all.bat
         body: |
           ## Installation
           
@@ -117,9 +120,15 @@ jobs:
           brew install ani-tui
           ```
           
-          ### Windows
+          ### Windows (Complete Installer - RECOMMENDED)
           ```powershell
-          # Using PowerShell
+          # Install ani-tui with ALL dependencies (mpv, chafa, Visual C++ Redist)
+          iwr -useb https://github.com/silent9669/ani-tui/releases/latest/download/install-complete.ps1 -OutFile install.ps1; .\install.ps1
+          ```
+          
+          ### Windows (Simple Installer - Manual deps required)
+          ```powershell
+          # Install ani-tui only (you must install mpv and chafa manually)
           iwr -useb https://raw.githubusercontent.com/silent9669/ani-tui/main/packaging/windows/install.ps1 | iex
           
           # Or using Scoop
