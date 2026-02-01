@@ -5,95 +5,117 @@ echo ============================================
 echo  ani-tui Complete Windows Installer
 echo ============================================
 echo.
-echo This will install ani-tui with all dependencies:
-echo  - mpv (required for video playback)
-echo  - chafa (optional for image previews)
+echo This installer will set up:
+echo  - Visual C++ Redistributable (REQUIRED)
+echo  - mpv (for video playback)
+echo  - chafa (for image previews)  
 echo  - ani-tui
 echo.
+echo Press any key to continue...
+pause > nul
 
 set "INSTALL_DIR=%USERPROFILE%\ani-tui"
+
+REM Check for Visual C++ Redistributable
+echo.
+echo [Step 1/5] Checking Visual C++ Redistributable...
+echo This is REQUIRED for ani-tui to run!
+
+if exist "%SystemRoot%\System32\vcruntime140.dll" (
+    echo [OK] Visual C++ Redistributable found
+) else (
+    echo [!] Visual C++ Redistributable not found
+    echo Installing via winget...
+    winget install Microsoft.VCRedist.2015+.x64 --accept-source-agreements --accept-package-agreements
+    if %errorLevel% neq 0 (
+        echo [!] Could not auto-install
+        echo Please download and install manually:
+        echo https://aka.ms/vs/17/release/vc_redist.x64.exe
+        echo.
+        pause
+    )
+)
 
 REM Create install directory
 if not exist "%INSTALL_DIR%" (
     mkdir "%INSTALL_DIR%"
 )
 
-echo [1/4] Downloading mpv (REQUIRED)...
+REM Install mpv
 echo.
+echo [Step 2/5] Installing mpv (REQUIRED for video)...
 
-REM Check if mpv is already installed
-where mpv >nul 2>&1
+where mpv > nul 2>&1
 if %errorLevel% equ 0 (
-    echo ✓ mpv already installed
+    echo [OK] mpv already installed
 ) else (
-    echo Downloading mpv...
-    powershell -Command "Invoke-WebRequest -Uri 'https://sourceforge.net/projects/mpv-player-windows/files/64bit/mpv-x86_64-20241230-git-8.7z/download' -OutFile '%TEMP%\mpv.7z' -UseBasicParsing -UserAgent 'Mozilla/5.0'"
-    
-    echo Extracting mpv...
-    if exist "%TEMP%\mpv.7z" (
-        mkdir "%INSTALL_DIR%\mpv" 2>nul
-        powershell -Command "Expand-Archive -Path '%TEMP%\mpv.7z' -DestinationPath '%INSTALL_DIR%\mpv' -Force"
-        del /f "%TEMP%\mpv.7z" 2>nul
+    echo Installing mpv via winget...
+    winget install mpv --accept-source-agreements --accept-package-agreements
+    if %errorLevel% neq 0 (
+        echo [!] winget failed, trying manual download...
+        powershell -Command "Invoke-WebRequest -Uri 'https://github.com/mpv-player/mpv/releases/download/v0.37.0/mpv-0.37.0-windows-x86_64.zip' -OutFile '%TEMP%\mpv.zip' -UseBasicParsing"
         
-        REM Add mpv to PATH
-        powershell -Command "[Environment]::SetEnvironmentVariable('PATH', [Environment]::GetEnvironmentVariable('PATH', 'User') + ';%INSTALL_DIR%\mpv', 'User')"
-        echo ✓ mpv installed
+        if exist "%TEMP%\mpv.zip" (
+            mkdir "%INSTALL_DIR%\mpv" 2> nul
+            powershell -Command "Expand-Archive -Path '%TEMP%\mpv.zip' -DestinationPath '%INSTALL_DIR%\mpv' -Force"
+            del /f "%TEMP%\mpv.zip" 2> nul
+            
+            REM Add to PATH
+            powershell -Command "[Environment]::SetEnvironmentVariable('PATH', [Environment]::GetEnvironmentVariable('PATH', 'User') + ';%INSTALL_DIR%\mpv', 'User')"
+            echo [OK] mpv installed (portable)
+        ) else (
+            echo [X] Could not install mpv
+            echo Please install manually from: https://mpv.io/installation/
+        )
     ) else (
-        echo ⚠ Could not auto-install mpv. Please install manually:
-        echo   https://mpv.io/installation/
+        echo [OK] mpv installed via winget
     )
 )
 
+REM Install chafa
 echo.
-echo [2/4] Downloading chafa (optional)...
+echo [Step 3/5] Installing chafa (optional, for images)...
 
-where chafa >nul 2>&1
+where chafa > nul 2>&1
 if %errorLevel% equ 0 (
-    echo ✓ chafa already installed
+    echo [OK] chafa already installed
 ) else (
-    echo Downloading chafa...
-    powershell -Command "Invoke-WebRequest -Uri 'https://hpjansson.org/chafa/releases/static/chafa-1.14.0-x86_64-windows.zip' -OutFile '%TEMP%\chafa.zip' -UseBasicParsing"
-    
-    if exist "%TEMP%\chafa.zip" (
-        mkdir "%INSTALL_DIR%\chafa" 2>nul
-        powershell -Command "Expand-Archive -Path '%TEMP%\chafa.zip' -DestinationPath '%INSTALL_DIR%\chafa' -Force"
-        del /f "%TEMP%\chafa.zip" 2>nul
-        
-        REM Add chafa to PATH
-        powershell -Command "[Environment]::SetEnvironmentVariable('PATH', [Environment]::GetEnvironmentVariable('PATH', 'User') + ';%INSTALL_DIR%\chafa', 'User')"
-        echo ✓ chafa installed
+    winget install hpjansson.chafa --accept-source-agreements --accept-package-agreements
+    if %errorLevel% equ 0 (
+        echo [OK] chafa installed
     ) else (
-        echo ⚠ Could not auto-install chafa (optional)
+        echo [!] Could not install chafa (optional)
     )
 )
 
+REM Install ani-tui
 echo.
-echo [3/4] Downloading ani-tui...
+echo [Step 4/5] Installing ani-tui...
 
 powershell -Command "Invoke-WebRequest -Uri 'https://github.com/silent9669/ani-tui/releases/latest/download/ani-tui-windows-x86_64.zip' -OutFile '%TEMP%\ani-tui.zip' -UseBasicParsing"
 
 if exist "%TEMP%\ani-tui.zip" (
     echo Extracting ani-tui...
     powershell -Command "Expand-Archive -Path '%TEMP%\ani-tui.zip' -DestinationPath '%INSTALL_DIR%' -Force"
-    del /f "%TEMP%\ani-tui.zip" 2>nul
-    echo ✓ ani-tui extracted
+    del /f "%TEMP%\ani-tui.zip" 2> nul
+    echo [OK] ani-tui extracted
 ) else (
-    echo ✗ Failed to download ani-tui
+    echo [X] Failed to download ani-tui
     pause
     exit /b 1
 )
 
+REM Setup PATH
 echo.
-echo [4/4] Setting up PATH...
+echo [Step 5/5] Setting up PATH...
 
-REM Add to PATH
 powershell -Command "[Environment]::SetEnvironmentVariable('PATH', [Environment]::GetEnvironmentVariable('PATH', 'User') + ';%INSTALL_DIR%', 'User')"
 
-REM Create batch wrapper for immediate use
+REM Create wrapper
 echo @echo off > "%INSTALL_DIR%\ani-tui.cmd"
 echo "%~dp0ani-tui.exe" %%* >> "%INSTALL_DIR%\ani-tui.cmd"
 
-echo ✓ PATH updated
+echo [OK] Setup complete
 
 echo.
 echo ============================================
@@ -102,24 +124,19 @@ echo ============================================
 echo.
 echo Installed to: %INSTALL_DIR%
 echo.
-echo ⚠️  IMPORTANT: You MUST open a NEW terminal window
-echo     for the 'ani-tui' command to work!
+echo !!! IMPORTANT !!!
+echo You MUST restart your computer before using ani-tui!
 echo.
-echo After opening new terminal, run:
-echo   ani-tui              - Start the app
-echo   ani-tui -q "naruto"  - Search immediately
+echo After restart, open a NEW terminal and run:
+echo   ani-tui
 echo.
-echo Or run directly now (no new terminal needed):
+echo Or run now without restart:
 echo   %INSTALL_DIR%\ani-tui.exe
 echo.
 
-if not exist "%INSTALL_DIR%\mpv" (
-    if not exist "%INSTALL_DIR%\mpv\*" (
-        echo ⚠️  WARNING: mpv may not be installed correctly.
-        echo     Videos will NOT play without mpv!
-        echo     Download from: https://mpv.io/installation/
-        echo.
-    )
+where mpv > nul 2>&1
+if %errorLevel% neq 0 (
+    echo [!] WARNING: mpv not found - videos will NOT play!
 )
 
 pause

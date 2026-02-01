@@ -1,6 +1,5 @@
-# Complete Windows Installer for ani-tui
-# This script installs ani-tui with ALL dependencies automatically
-# No manual setup required!
+# Complete Windows Installer for ani-tui v3
+# Installs ani-tui with ALL dependencies including Visual C++ Redistributable
 
 param(
     [string]$InstallDir = "$env:LOCALAPPDATA\ani-tui"
@@ -23,90 +22,100 @@ Write-Status "ani-tui Complete Installer" "Cyan"
 Write-Status "========================================" "Cyan"
 Write-Status ""
 
+# Step 0: Check/Install Visual C++ Redistributable (CRITICAL)
+Write-Status "Step 0: Checking Visual C++ Redistributable..." "Yellow"
+Write-Status "This is REQUIRED for ani-tui to run on Windows!" "Red"
+
+$vcInstalled = $false
+try {
+    # Check if VCRUNTIME140.dll exists in System32
+    if (Test-Path "$env:SystemRoot\System32\vcruntime140.dll") {
+        Write-Status "✓ Visual C++ Redistributable appears to be installed" "Green"
+        $vcInstalled = $true
+    }
+} catch {}
+
+if (-not $vcInstalled) {
+    Write-Status "Visual C++ Redistributable not detected." "Yellow"
+    Write-Status "Installing via winget..." "Gray"
+    
+    try {
+        winget install Microsoft.VCRedist.2015+.x64 --accept-source-agreements --accept-package-agreements
+        Write-Status "✓ Visual C++ Redistributable installed" "Green"
+        Write-Status "IMPORTANT: You may need to restart your computer after installation!" "Red"
+    } catch {
+        Write-Status "⚠ Could not auto-install Visual C++ Redistributable" "Yellow"
+        Write-Status "Please download and install manually:" "Yellow"
+        Write-Status "https://aka.ms/vs/17/release/vc_redist.x64.exe" "Cyan"
+        Write-Status ""
+        $continue = Read-Host "Continue anyway? (y/N)"
+        if ($continue -ne 'y' -and $continue -ne 'Y') {
+            exit 1
+        }
+    }
+}
+
 # Step 1: Create installation directory
+Write-Status ""
 Write-Status "Step 1: Creating installation directory..." "Yellow"
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 Write-Status "✓ Directory created: $InstallDir" "Green"
 
-# Step 2: Install mpv (Required)
+# Step 2: Install mpv using winget (most reliable)
 Write-Status ""
 Write-Status "Step 2: Installing mpv (REQUIRED for video playback)..." "Yellow"
 
 if (Test-Command "mpv") {
     Write-Status "✓ mpv already installed" "Green"
 } else {
-    Write-Status "Downloading mpv..." "Gray"
+    Write-Status "Attempting to install mpv via winget..." "Gray"
     try {
-        # Download mpv for Windows
-        $mpvUrl = "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20241230/mpv-x86_64-windows-gnu-20241230.7z"
-        $mpvTemp = "$env:TEMP\mpv.7z"
-        $mpvDir = "$InstallDir\mpv"
-        
-        Invoke-WebRequest -Uri $mpvUrl -OutFile $mpvTemp -UseBasicParsing -ErrorAction Stop
-        
-        Write-Status "Extracting mpv..." "Gray"
-        New-Item -ItemType Directory -Force -Path $mpvDir | Out-Null
-        
-        # Use Expand-Archive for 7z if available, otherwise use tar
-        if (Get-Command 7z -ErrorAction SilentlyContinue) {
-            & 7z x "$mpvTemp" -o"$mpvDir" -y
-        } else {
-            # Fallback: Download portable mpv
-            $mpvPortableUrl = "https://sourceforge.net/projects/mpv-player-windows/files/64bit/mpv-x86_64-20241230-git-8.7z/download"
-            Write-Status "Downloading mpv (alternative method)..." "Gray"
-            Invoke-WebRequest -Uri $mpvPortableUrl -OutFile $mpvTemp -UseBasicParsing -UserAgent "Mozilla/5.0"
-            
-            # Extract using Windows built-in (if it's a zip)
-            if ($mpvTemp -like "*.zip") {
-                Expand-Archive -Path $mpvTemp -DestinationPath $mpvDir -Force
-            }
-        }
-        
-        # Add mpv to PATH
-        $currentPath = [Environment]::GetEnvironmentVariable("PATH", "User")
-        if ($currentPath -notlike "*$mpvDir*") {
-            [Environment]::SetEnvironmentVariable("PATH", "$currentPath;$mpvDir", "User")
-            $env:PATH = "$env:PATH;$mpvDir"
-        }
-        
-        Remove-Item $mpvTemp -Force -ErrorAction SilentlyContinue
-        Write-Status "✓ mpv installed successfully" "Green"
+        winget install mpv --accept-source-agreements --accept-package-agreements
+        Write-Status "✓ mpv installed via winget" "Green"
     } catch {
-        Write-Status "⚠ Could not auto-install mpv. Please install manually:" "Yellow"
-        Write-Status "  https://mpv.io/installation/" "Cyan"
+        Write-Status "⚠ winget failed, trying alternative method..." "Yellow"
+        
+        # Fallback: Download portable mpv as zip
+        try {
+            $mpvUrl = "https://github.com/mpv-player/mpv/releases/download/v0.37.0/mpv-0.37.0-windows-x86_64.zip"
+            $mpvTemp = "$env:TEMP\mpv.zip"
+            $mpvDir = "$InstallDir\mpv"
+            
+            Invoke-WebRequest -Uri $mpvUrl -OutFile $mpvTemp -UseBasicParsing -ErrorAction Stop
+            
+            Write-Status "Extracting mpv..." "Gray"
+            New-Item -ItemType Directory -Force -Path $mpvDir | Out-Null
+            Expand-Archive -Path $mpvTemp -DestinationPath $mpvDir -Force
+            Remove-Item $mpvTemp -Force -ErrorAction SilentlyContinue
+            
+            # Add mpv to PATH
+            $currentPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+            if ($currentPath -notlike "*$mpvDir*") {
+                [Environment]::SetEnvironmentVariable("PATH", "$currentPath;$mpvDir", "User")
+                $env:PATH = "$env:PATH;$mpvDir"
+            }
+            
+            Write-Status "✓ mpv installed (portable)" "Green"
+        } catch {
+            Write-Status "✗ Could not install mpv automatically" "Red"
+            Write-Status "Please install manually from: https://mpv.io/installation/" "Yellow"
+        }
     }
 }
 
-# Step 3: Install chafa (Optional but recommended)
+# Step 3: Install chafa (Optional)
 Write-Status ""
 Write-Status "Step 3: Installing chafa (for image previews)..." "Yellow"
 
 if (Test-Command "chafa") {
     Write-Status "✓ chafa already installed" "Green"
 } else {
-    Write-Status "Downloading chafa..." "Gray"
+    Write-Status "Attempting to install chafa via winget..." "Gray"
     try {
-        # Download chafa for Windows
-        $chafaUrl = "https://hpjansson.org/chafa/releases/static/chafa-1.14.0-x86_64-windows.zip"
-        $chafaTemp = "$env:TEMP\chafa.zip"
-        $chafaDir = "$InstallDir\chafa"
-        
-        Invoke-WebRequest -Uri $chafaUrl -OutFile $chafaTemp -UseBasicParsing -ErrorAction Stop
-        
-        Write-Status "Extracting chafa..." "Gray"
-        Expand-Archive -Path $chafaTemp -DestinationPath $chafaDir -Force
-        
-        # Add chafa to PATH
-        $currentPath = [Environment]::GetEnvironmentVariable("PATH", "User")
-        if ($currentPath -notlike "*$chafaDir*") {
-            [Environment]::SetEnvironmentVariable("PATH", "$currentPath;$chafaDir", "User")
-            $env:PATH = "$env:PATH;$chafaDir"
-        }
-        
-        Remove-Item $chafaTemp -Force -ErrorAction SilentlyContinue
-        Write-Status "✓ chafa installed successfully" "Green"
+        winget install hpjansson.chafa --accept-source-agreements --accept-package-agreements
+        Write-Status "✓ chafa installed via winget" "Green"
     } catch {
-        Write-Status "⚠ Could not auto-install chafa (optional)" "Yellow"
+        Write-Status "⚠ Could not install chafa (optional)" "Yellow"
     }
 }
 
@@ -155,11 +164,10 @@ if ($currentPath -notlike "*$InstallDir*") {
 # Update current session PATH
 $env:PATH = "$env:PATH;$InstallDir"
 
-# Step 6: Create wrapper scripts for immediate use
+# Step 6: Create wrapper scripts
 Write-Status ""
 Write-Status "Step 6: Creating shortcuts..." "Yellow"
 
-# Create ani-tui.cmd in install directory for immediate use
 $wrapperPath = Join-Path $InstallDir "ani-tui.cmd"
 $wrapperContent = @'
 @echo off
@@ -167,10 +175,6 @@ $wrapperContent = @'
 '@
 Set-Content -Path $wrapperPath -Value $wrapperContent -Force
 Write-Status "✓ Created ani-tui.cmd" "Green"
-
-# Also create a .bat version
-$batPath = Join-Path $InstallDir "ani-tui.bat"
-Set-Content -Path $batPath -Value $wrapperContent -Force
 
 # Step 7: Test installation
 Write-Status ""
@@ -190,14 +194,6 @@ if (Test-Path $binaryPath) {
     }
 } else {
     Write-Status "✗ Binary not found!" "Red"
-}
-
-# Check PATH
-$aniTuiInPath = Get-Command ani-tui -ErrorAction SilentlyContinue
-if ($aniTuiInPath) {
-    Write-Status "✓ ani-tui command is available in PATH" "Green"
-} else {
-    Write-Status "⚠ ani-tui not yet in PATH (requires new terminal)" "Yellow"
 }
 
 # Check dependencies
@@ -224,14 +220,14 @@ Write-Status "========================================" "Green"
 Write-Status ""
 Write-Status "Installation Directory: $InstallDir" "White"
 Write-Status ""
-Write-Status "IMPORTANT: You MUST open a NEW terminal window to use 'ani-tui' command" "Yellow"
+Write-Status "⚠⚠⚠  IMPORTANT  ⚠⚠⚠" "Red"
+Write-Status "You MUST do ONE of the following:" "Yellow"
 Write-Status ""
-Write-Status "After opening new terminal, you can run:" "White"
-Write-Status "  ani-tui              - Start the app" "Cyan"
-Write-Status "  ani-tui -q ""naruto"" - Search immediately" "Cyan"
+Write-Status "1. Restart your computer (recommended)" "Cyan"
+Write-Status "   Then open a new terminal and run: ani-tui" "White"
 Write-Status ""
-Write-Status "Or run directly now (without new terminal):" "White"
-Write-Status "  $InstallDir\ani-tui.exe" "Cyan"
+Write-Status "2. Or run directly now (without restart):" "Cyan"
+Write-Status "   $InstallDir\ani-tui.exe" "White"
 Write-Status ""
 
 Read-Host "Press Enter to exit"
