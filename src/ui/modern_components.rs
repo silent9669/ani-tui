@@ -32,11 +32,12 @@ impl SplashScreen {
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect) {
-        // Create centered layout - cleaner with less spacing
+        // Create centered layout with title and version
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Percentage(35),
+                Constraint::Percentage(30),
+                Constraint::Length(3), // Title "ANI-TUI"
                 Constraint::Length(1), // Version tag
                 Constraint::Length(1), // Spacing
                 Constraint::Length(1), // Loading bar
@@ -51,6 +52,16 @@ impl SplashScreen {
         let blue_intensity = (255.0 * fade_progress) as u8;
         let title_color = Color::Rgb(0, 100, blue_intensity);
 
+        // ANI-TUI Title with fade-in effect
+        let title_style = Style::default()
+            .fg(title_color)
+            .add_modifier(Modifier::BOLD);
+
+        let title_text = Paragraph::new("ANI-TUI")
+            .alignment(Alignment::Center)
+            .style(title_style);
+        frame.render_widget(title_text, chunks[1]);
+
         // Version tag with fade-in effect
         let version_style = Style::default()
             .fg(title_color)
@@ -59,7 +70,7 @@ impl SplashScreen {
         let version_text = Paragraph::new("v3.0.0")
             .alignment(Alignment::Center)
             .style(version_style);
-        frame.render_widget(version_text, chunks[1]);
+        frame.render_widget(version_text, chunks[2]);
 
         // Loading bar
         let bar_width = 30;
@@ -70,7 +81,7 @@ impl SplashScreen {
         let loading_bar = Paragraph::new(bar_text)
             .alignment(Alignment::Center)
             .style(Style::default().fg(bar_color));
-        frame.render_widget(loading_bar, chunks[3]);
+        frame.render_widget(loading_bar, chunks[4]);
     }
 
     fn get_loading_bar_color(&self) -> Color {

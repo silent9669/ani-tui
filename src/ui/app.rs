@@ -339,7 +339,7 @@ impl App {
                 Span::raw(prefix),
                 Span::styled(&history.title, title_style),
                 Span::raw(format!(" - Episode {}", history.episode_number)),
-                Span::styled("  *last watched", Style::default().fg(Color::DarkGray)),
+                Span::styled("  *last watched", Style::default().fg(Color::Red)),
             ]));
         }
 
@@ -414,11 +414,11 @@ impl App {
                 .map(|t| t.clone())
                 .unwrap_or_else(|| format!("Episode {}", episode.number));
             
-            // Use yellow color for last watched episodes
+            // Use red color for last watched episodes
             let style = if is_selected {
                 Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
             } else if is_last_watched {
-                Style::default().fg(Color::Yellow)
+                Style::default().fg(Color::Red)
             } else {
                 Style::default()
             };
@@ -437,7 +437,7 @@ impl App {
             
             // Add "*last watched" indicator if this is the last watched episode
             if is_last_watched {
-                spans.push(Span::styled("  *last watched", Style::default().fg(Color::DarkGray)));
+                spans.push(Span::styled("  *last watched", Style::default().fg(Color::Red)));
             }
             
             lines.push(Line::from(spans));
