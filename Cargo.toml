@@ -2,10 +2,10 @@
 name = "ani-tui"
 version = "3.0.0"
 edition = "2021"
-authors = ["Your Name <you@example.com>"]
-description = "A Netflix-inspired TUI for anime streaming"
+authors = ["silent9669 <dev@silent9669.com>"]
+description = "Netflix-inspired TUI for anime streaming"
 license = "MIT"
-repository = "https://github.com/yourusername/ani-tui"
+repository = "https://github.com/silent9669/ani-tui"
 
 [dependencies]
 # Async runtime

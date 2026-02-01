@@ -101,6 +101,28 @@ impl App {
         // Load continue watching - use a direct reference without Mutex since Database has internal locking
         let continue_watching = db.get_continue_watching(10).await.unwrap_or_default();
 
+        // Setup image pipeline
+        let image_pipeline = ImagePipeline::new(db.clone());
+
+        // Preload all watch history images in background
+        let images_to_preload: Vec<(String, String)> = continue_watching.iter()
+            .filter(|h| !h.cover_url.is_empty())
+            .map(|h| (format!("continue_watching_{}", h.anime_id), h.cover_url.clone()))
+            .collect();
+        let _ = image_pipeline.preload_images(images_to_preload);
+
+        // Load first image immediately if available
+        let mut current_image_data = None;
+        if let Some(first) = continue_watching.first() {
+            if !first.cover_url.is_empty() {
+                let image_id = format!("continue_watching_{}", first.anime_id);
+                match image_pipeline.request_download(image_id, first.cover_url.clone()).await {
+                    Ok(data) => current_image_data = Some(data),
+                    Err(e) => tracing::warn!("Failed to load first cover image: {}", e),
+                }
+            }
+        }
+
         // Setup selected source - only one at a time
         let selected_source_idx = if config.sources.vietnamese { 1 } else { 0 };
         let selected_source = if config.sources.vietnamese {
@@ -111,7 +133,6 @@ impl App {
 
         // Database already has internal locking
         let metadata_cache = MetadataCache::new(db.clone());
-        let image_pipeline = ImagePipeline::new(db.clone());
 
         // Check if chafa is available
         if !ChafaRenderer::is_available() {
@@ -147,7 +168,7 @@ impl App {
             continue_watching_selected: 0,
             loading_spinner: LoadingSpinner::new(),
             toast: None,
-            current_image_data: None,
+            current_image_data,
             show_episode_list: false,
             episode_list_scroll: 0,
             search_pending: false,
@@ -1272,6 +1293,12 @@ impl App {
         self.episodes.clear();
         self.show_toast(format!("Loading episodes for {}...", anime.title), 3);
 
+        // Find last watched episode position for this anime
+        let anime_id = format!("{}:{}", anime.provider, anime.id);
+        let last_watched_ep = self.continue_watching.iter()
+            .find(|h| h.anime_id == anime_id)
+            .map(|h| h.episode_number);
+
         // Load episodes from the provider
         if let Some(provider) = self.providers.get_provider(&anime.provider) {
             tracing::info!("Found provider, loading episodes for anime_id: {}", anime.id);
@@ -1280,8 +1307,10 @@ impl App {
                     tracing::info!("Loaded {} episodes", episodes.len());
                     self.episodes = episodes;
                     if !self.episodes.is_empty() {
-                        // Go to episode selection screen instead of playing immediately
-                        self.episode_list_scroll = 0;
+                        // Set scroll position to last watched episode, or 0 if not found
+                        self.episode_list_scroll = last_watched_ep
+                            .and_then(|ep| self.episodes.iter().position(|e| e.number == ep))
+                            .unwrap_or(0);
                         self.current_screen = Screen::EpisodeSelect;
                         self.show_toast(format!("Found {} episodes", self.episodes.len()), 2);
                     } else {
