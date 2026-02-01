@@ -20,3 +20,9 @@ Thumbs.db
 
 # Config (don't commit personal configs)
 config.toml
+
+# Development/Agent files
+.agent/
+.opencode/
+.ruff_cache/
+.venv/
