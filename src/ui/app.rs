@@ -341,12 +341,12 @@ impl App {
         area: Rect,
     ) {
         if let Some(history) = self.continue_watching.get(self.continue_watching_selected) {
-            // Split into image and info
+            // Split into image and info - portrait orientation
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Percentage(50), // Larger image area
-                    Constraint::Percentage(50), // Info area
+                    Constraint::Percentage(60), // Image area (portrait orientation)
+                    Constraint::Percentage(40), // Info area
                 ])
                 .margin(1)
                 .split(area);

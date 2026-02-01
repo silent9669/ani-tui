@@ -106,12 +106,12 @@ impl PreviewPanel {
         let block = Block::default().borders(Borders::ALL).title("Preview");
 
         if let Some(anime) = anime {
-            // Split area into image (top) and info (bottom)
+            // Split area into image (top) and info (bottom) - portrait orientation
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Percentage(40), // Image area
-                    Constraint::Percentage(60), // Info area
+                    Constraint::Percentage(70), // Image area (portrait orientation)
+                    Constraint::Percentage(30), // Info area
                 ])
                 .margin(1)
                 .split(area);
@@ -203,7 +203,7 @@ impl PreviewPanel {
                         .replace("<b>", "")
                         .replace("</b>", "");
 
-                    for line in clean_desc.lines().take(6) {
+                    for line in clean_desc.lines() {
                         if !line.trim().is_empty() {
                             lines.push(Line::from(line.to_string()));
                         }
@@ -220,7 +220,7 @@ impl PreviewPanel {
                 // Show base synopsis if available
                 if let Some(ref synopsis) = anime.base.synopsis {
                     lines.push(Line::from(""));
-                    for line in synopsis.lines().take(5) {
+                    for line in synopsis.lines() {
                         if !line.trim().is_empty() {
                             lines.push(Line::from(line.to_string()));
                         }

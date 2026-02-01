@@ -110,12 +110,24 @@ Write-Status "Step 3: Installing chafa (for image previews)..." "Yellow"
 if (Test-Command "chafa") {
     Write-Status "✓ chafa already installed" "Green"
 } else {
+    # Try winget first
     Write-Status "Attempting to install chafa via winget..." "Gray"
     try {
         winget install hpjansson.chafa --accept-source-agreements --accept-package-agreements
         Write-Status "✓ chafa installed via winget" "Green"
     } catch {
-        Write-Status "⚠ Could not install chafa (optional)" "Yellow"
+        # Fallback to scoop
+        Write-Status "⚠ winget failed, trying scoop..." "Yellow"
+        try {
+            if (Test-Command "scoop") {
+                scoop install chafa
+                Write-Status "✓ chafa installed via scoop" "Green"
+            } else {
+                Write-Status "⚠ scoop not available. Install chafa manually or via winget." "Yellow"
+            }
+        } catch {
+            Write-Status "⚠ Could not install chafa (optional)" "Yellow"
+        }
     }
 }
 
