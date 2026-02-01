@@ -17,13 +17,15 @@ brew install ani-tui
 
 ### Windows
 
-**Option 1: PowerShell Install (One Command)**
+**🌟 Option 1: Complete Auto-Installer (RECOMMENDED)**
 
-Copy and paste this entire command into PowerShell:
+Installs ani-tui + mpv + chafa automatically:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr -useb https://raw.githubusercontent.com/silent9669/ani-tui/master/packaging/windows/install-easy.ps1 | iex"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr -useb https://raw.githubusercontent.com/silent9669/ani-tui/master/packaging/windows/install-complete.ps1 | iex"
 ```
+
+Or download and double-click: [install-all.bat](https://raw.githubusercontent.com/silent9669/ani-tui/master/packaging/windows/install-all.bat)
 
 **Option 2: Manual Download**
 
@@ -37,6 +39,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr -useb https://raw.gi
 ```powershell
 scoop bucket add ani-tui https://github.com/silent9669/ani-tui
 scoop install ani-tui
+scoop install mpv
 ```
 
 ### Linux
