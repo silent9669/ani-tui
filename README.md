@@ -1,6 +1,6 @@
 # ani-tui
 
-A Netflix-inspired TUI (Terminal User Interface) for streaming anime with support for English and Vietnamese subtitles.
+A TUI (Terminal User Interface) for streaming anime with support for English and Vietnamese subtitles.
 
 ## Installation
 
