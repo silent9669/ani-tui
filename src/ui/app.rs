@@ -1,10 +1,11 @@
 use crate::config::Config;
 use crate::db::Database;
-use crate::image::{AsciiRenderer, ImagePipeline};
+use crate::image::ImagePipeline;
 use crate::metadata::{EnrichedAnime, MetadataCache};
 use crate::player::Player;
 use crate::providers::{AnimeProvider, Episode, Language, ProviderRegistry};
 use crate::ui::components::{LoadingSpinner, Toast};
+use crate::ui::image_renderer::ImageRenderer;
 use crate::ui::modern_components::{PreviewPanel, SearchOverlay, SourceSelectModal, SplashScreen};
 use crate::ui::player_controller::{ControlAction, PlayerController, PlayerState};
 use anyhow::Result;
@@ -21,8 +22,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, ListState, Paragraph},
     Frame, Terminal,
 };
-use std::io::{self, Write};
-use std::process::{Command, Stdio};
+use std::io;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -52,8 +52,7 @@ pub struct App {
     metadata_cache: MetadataCache,
     image_pipeline: ImagePipeline,
     player_controller: PlayerController,
-    #[allow(dead_code)]
-    chafa_renderer: AsciiRenderer,
+
 
     // Source selection - only one source at a time
     selected_source: Language,
@@ -76,6 +75,9 @@ pub struct App {
     // Continue watching
     continue_watching: Vec<crate::db::WatchHistory>,
     continue_watching_selected: usize,
+    
+    // Preloaded metadata for continue watching (anime_id -> total_episodes)
+    continue_watching_metadata: std::collections::HashMap<String, u32>,
 
     // UI Components
     loading_spinner: LoadingSpinner,
@@ -84,6 +86,9 @@ pub struct App {
     // Image cache for current preview
     pub(crate) current_image_data: Option<Vec<u8>>,
     current_sixel_cache: Option<String>,
+    
+    // New image renderer with multi-protocol support
+    image_renderer: ImageRenderer,
 
     // Track previous screen for navigation
     previous_screen: Option<Screen>,
@@ -94,6 +99,14 @@ pub struct App {
     // Episode list modal in player
     show_episode_list: bool,
     episode_list_scroll: usize,
+
+    // Episode selection screen (Phase 3: grid layout with pagination)
+    episode_filter: String,
+    episode_filter_mode: bool,
+    episode_selected_index: usize,
+    episode_grid_columns: usize,
+    episode_current_page: usize,
+    episodes_per_page: usize,
 
     // Search debounce
     search_pending: bool,
@@ -144,13 +157,8 @@ impl App {
         // Database already has internal locking
         let metadata_cache = MetadataCache::new(db.clone());
 
-        // Check if chafa is available for image rendering
-        if !Self::is_chafa_available() {
-            eprintln!("Warning: chafa is not installed. Image previews will not work.");
-            eprintln!("Install chafa:");
-            eprintln!("  macOS: brew install chafa");
-            eprintln!("  Windows: scoop install chafa");
-        }
+        // Initialize new image renderer with multi-protocol support
+        let image_renderer = ImageRenderer::new();
 
         Ok(Self {
             config,
@@ -164,7 +172,6 @@ impl App {
             metadata_cache,
             image_pipeline,
             player_controller: PlayerController::new(),
-            chafa_renderer: AsciiRenderer::new(),
             selected_source,
             selected_source_idx,
             show_source_modal: false,
@@ -180,24 +187,21 @@ impl App {
             toast: None,
             current_image_data,
             current_sixel_cache: None,
+            image_renderer,
             previous_screen: None,
             needs_preview_load: false,
             show_episode_list: false,
             episode_list_scroll: 0,
+            episode_filter: String::new(),
+            episode_filter_mode: false,
+            episode_selected_index: 0,
+            episode_grid_columns: 6,
+            episode_current_page: 0,
+            episodes_per_page: 100,
+            continue_watching_metadata: std::collections::HashMap::new(),
             search_pending: false,
             last_keypress: Instant::now(),
         })
-    }
-
-    /// Check if chafa is available in the system PATH
-    fn is_chafa_available() -> bool {
-        Command::new("chafa")
-            .arg("--version")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false)
     }
 
     pub fn set_initial_search(&mut self, query: String) {
@@ -363,16 +367,16 @@ impl App {
             let title_style = if is_selected {
                 Style::default()
                     .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
             } else {
-                Style::default().add_modifier(Modifier::BOLD)
+                Style::default()
+                    .add_modifier(Modifier::BOLD)
             };
 
+            // Only show anime title in the list - larger text
             history_lines.push(Line::from(vec![
                 Span::raw(prefix),
                 Span::styled(&history.title, title_style),
-                Span::raw(format!(" - Episode {}", history.episode_number)),
-                Span::styled("  *last watched", Style::default().fg(Color::Red)),
             ]));
         }
 
@@ -386,11 +390,16 @@ impl App {
         frame: &mut Frame,
         area: Rect,
     ) {
-        if let Some(history) = self.continue_watching.get(self.continue_watching_selected) {
+        if let Some(history) = self.continue_watching.get(self.continue_watching_selected).cloned() {
             let history_title = history.title.clone();
             let history_cover_url = history.cover_url.clone();
             let history_episode = history.episode_number;
+            let history_episode_title = history.episode_title.clone();
             let history_provider = history.provider.clone();
+            let history_position = history.position_seconds;
+            let history_total = history.total_seconds;
+            let history_updated = history.updated_at;
+            let history_anime_id = history.anime_id.clone();
 
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
@@ -431,34 +440,132 @@ impl App {
                 frame.render_widget(image_widget, chunks[0]);
             }
 
+            // Enhanced preview panel with full episode information
             let mut info_lines: Vec<Line> = Vec::new();
             
+            // Anime title - centered and prominent
+            info_lines.push(Line::from(""));
             info_lines.push(Line::from(vec![Span::styled(
-                history_title,
+                history_title.clone(),
                 Style::default()
                     .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
             )]));
-            
             info_lines.push(Line::from(""));
             
+            // Show episode count info - fetch from provider if not cached
+            let anime_id = format!("{}:{}", history_provider, history_anime_id.split(':').nth(1).unwrap_or(""));
+            let total_eps = self.continue_watching_metadata.get(&anime_id).copied();
+            
+            if let Some(total) = total_eps {
+                info_lines.push(Line::from(vec![
+                    Span::raw("Total Episodes: "),
+                    Span::styled(total.to_string(), Style::default().fg(Color::Green)),
+                ]));
+            } else {
+                // Show loading and trigger background fetch
+                info_lines.push(Line::from(vec![
+                    Span::raw("Total Episodes: "),
+                    Span::styled("Loading...", Style::default().fg(Color::Yellow)),
+                ]));
+            }
+            
+            // Episode information with title if available
+            let ep_display = if let Some(ref ep_title) = history_episode_title {
+                format!("{} - {}", history_episode, ep_title)
+            } else {
+                history_episode.to_string()
+            };
+            
             info_lines.push(Line::from(vec![
-                Span::raw("Episode: "),
-                Span::styled(history_episode.to_string(), Style::default().fg(Color::Green)),
+                Span::raw("Current Episode: "),
+                Span::styled(ep_display, Style::default().fg(Color::Green)),
             ]));
             
+            // Provider
             info_lines.push(Line::from(vec![
                 Span::raw("Provider: "),
                 Span::styled(&history_provider, Style::default().fg(Color::Yellow)),
             ]));
             
+            // Last watched timestamp
+            let time_ago = Self::format_time_ago(history_updated);
+            info_lines.push(Line::from(vec![
+                Span::raw("Last watched: "),
+                Span::styled(time_ago, Style::default().fg(Color::Magenta)),
+            ]));
+            
+            // Progress bar if there's a saved position
+            if history_position > 0 && history_total > 0 {
+                let progress_pct = (history_position as f64 / history_total as f64 * 100.0) as u32;
+                let progress_bar = Self::create_progress_bar(progress_pct, 20);
+                let position_str = Self::format_duration(history_position);
+                let total_str = Self::format_duration(history_total);
+                
+                info_lines.push(Line::from(""));
+                info_lines.push(Line::from(vec![
+                    Span::raw("Progress: "),
+                    Span::styled(progress_bar, Style::default().fg(Color::Blue)),
+                    Span::raw(format!(" {}%", progress_pct)),
+                ]));
+                info_lines.push(Line::from(vec![
+                    Span::raw(format!("{} / {}", position_str, total_str)),
+                ]));
+            }
+            
             info_lines.push(Line::from(""));
-            info_lines.push(Line::from("Press Enter to resume watching"));
+            info_lines.push(Line::from(vec![
+                Span::styled("Press Enter to resume watching", 
+                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            ]));
 
             let info_widget = Paragraph::new(Text::from(info_lines))
                 .block(Block::default().borders(Borders::ALL).title("Preview"));
             frame.render_widget(info_widget, chunks[1]);
         }
+    }
+
+    /// Format a duration in seconds to a human-readable string (HH:MM:SS or MM:SS)
+    fn format_duration(seconds: u64) -> String {
+        let hours = seconds / 3600;
+        let minutes = (seconds % 3600) / 60;
+        let secs = seconds % 60;
+        
+        if hours > 0 {
+            format!("{:02}:{:02}:{:02}", hours, minutes, secs)
+        } else {
+            format!("{:02}:{:02}", minutes, secs)
+        }
+    }
+
+    /// Format a DateTime to a "time ago" string (e.g., "2 hours ago", "3 days ago")
+    fn format_time_ago(dt: chrono::DateTime<chrono::Utc>) -> String {
+        let now = chrono::Utc::now();
+        let duration = now.signed_duration_since(dt);
+        
+        let seconds = duration.num_seconds();
+        let minutes = duration.num_minutes();
+        let hours = duration.num_hours();
+        let days = duration.num_days();
+        
+        if seconds < 60 {
+            "just now".to_string()
+        } else if minutes < 60 {
+            format!("{} minute{} ago", minutes, if minutes == 1 { "" } else { "s" })
+        } else if hours < 24 {
+            format!("{} hour{} ago", hours, if hours == 1 { "" } else { "s" })
+        } else if days < 30 {
+            format!("{} day{} ago", days, if days == 1 { "" } else { "s" })
+        } else {
+            dt.format("%Y-%m-%d").to_string()
+        }
+    }
+
+    /// Create a text progress bar
+    fn create_progress_bar(percentage: u32, width: usize) -> String {
+        let filled = (percentage as usize * width / 100).min(width);
+        let empty = width - filled;
+        format!("[{}{}]", "█".repeat(filled), "░".repeat(empty))
     }
 
     pub(crate) fn render_image_with_ratatui(&mut self, frame: &mut Frame, area: Rect, image_data: &[u8]) {
@@ -467,86 +574,38 @@ impl App {
             return;
         }
 
-        let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
-        let is_terminal = term_program == "Apple_Terminal";
-
-        if is_terminal {
-            tracing::warn!("Terminal.app does not support inline images.");
-            self.show_image_placeholder(frame, area, false);
-            return;
-        }
-
+        // Check if image data changed
         let needs_update = match &self.current_image_data {
             Some(prev_data) => prev_data != image_data,
             None => true,
         };
 
         if needs_update {
-            let sixel = Self::convert_image_to_sixel(image_data, area.width as usize, area.height as usize);
-            match sixel {
-                Ok(sixel_output) => {
-                    self.current_sixel_cache = Some(sixel_output);
-                    self.current_image_data = Some(image_data.to_vec());
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to convert image to Sixel: {}", e);
-                    self.show_image_placeholder(frame, area, true);
-                    return;
-                }
+            // Clear cache when switching to a new image
+            self.image_renderer.clear_cache();
+            self.current_image_data = Some(image_data.to_vec());
+        }
+
+        // Render using the new multi-protocol image renderer
+        match self.image_renderer.render(image_data, area) {
+            Ok(None) => {
+                // Image rendered via escape codes (Kitty, iTerm2)
+                // Nothing to do - image is displayed by terminal
             }
-        }
-
-        if let Some(ref sixel) = self.current_sixel_cache {
-            self.render_sixel_to_frame(frame, area, sixel);
-        } else {
-            self.show_image_placeholder(frame, area, false);
-        }
-    }
-
-    fn convert_image_to_sixel(image_data: &[u8], width: usize, height: usize) -> Result<String, Box<dyn std::error::Error>> {
-        let mut child = Command::new("chafa")
-            .args(&[
-                "--format", "sixel",
-                "--size", &format!("{}x{}", width, height),
-                "--center", "on",
-                "--colors", "256",
-                "-",
-            ])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()?;
-
-        {
-            let stdin = child.stdin.as_mut().ok_or("Failed to open stdin")?;
-            stdin.write_all(image_data)?;
-        }
-
-        let output = child.wait_with_output()?;
-
-        if !output.status.success() {
-            return Err("chafa process failed".into());
-        }
-
-        Ok(String::from_utf8(output.stdout)?)
-    }
-
-    fn render_sixel_to_frame(&self, frame: &mut Frame, area: Rect, sixel: &str) {
-        let lines: Vec<&str> = sixel.lines().collect();
-        let max_lines = area.height as usize;
-        let max_width = area.width as usize;
-
-        for (i, line) in lines.iter().take(max_lines).enumerate() {
-            let truncated = if line.len() > max_width {
-                &line[..max_width]
-            } else {
-                line
-            };
-
-            let span = Span::raw(truncated.to_string());
-            let line_widget = Paragraph::new(span);
-            let line_area = Rect::new(area.x, area.y + i as u16, area.width, 1);
-            frame.render_widget(line_widget, line_area);
+            Ok(Some(lines)) => {
+                // Sixel protocol - render the lines
+                let widget = Paragraph::new(ratatui::text::Text::from(lines))
+                    .block(Block::default().borders(Borders::ALL).title("Cover Image"));
+                frame.render_widget(widget, area);
+            }
+            Err(e) => {
+                // Show error details
+                tracing::warn!("Image render error: {}", e);
+                let error_lines = e.to_lines();
+                let error_widget = Paragraph::new(ratatui::text::Text::from(error_lines))
+                    .block(Block::default().borders(Borders::ALL).title("⚠️ Image Error"));
+                frame.render_widget(error_widget, area);
+            }
         }
     }
 
@@ -594,74 +653,190 @@ impl App {
             })
             .unwrap_or_else(|| ("Select Episode".to_string(), None));
 
-        // Split area into info (top) and episodes (bottom)
+        // Filter episodes based on search
+        let filtered_episodes: Vec<(usize, &crate::providers::Episode)> = self.episodes.iter()
+            .enumerate()
+            .filter(|(_, ep)| {
+                if self.episode_filter.is_empty() {
+                    true
+                } else {
+                    let filter_lower = self.episode_filter.to_lowercase();
+                    let ep_str = format!("{}", ep.number);
+                    ep_str.contains(&filter_lower) || 
+                    ep.title.as_ref().map(|t| t.to_lowercase().contains(&filter_lower)).unwrap_or(false)
+                }
+            })
+            .collect();
+
+        // Calculate pagination
+        let total_episodes = filtered_episodes.len();
+        let total_pages = (total_episodes + self.episodes_per_page - 1) / self.episodes_per_page;
+        let current_page = self.episode_current_page.min(total_pages.saturating_sub(1));
+        let page_start = current_page * self.episodes_per_page;
+        let page_end = (page_start + self.episodes_per_page).min(total_episodes);
+        let page_episodes: Vec<_> = filtered_episodes.iter().skip(page_start).take(self.episodes_per_page).collect();
+
+        // Split area into header, filter bar, grid, and footer
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
             .constraints([
                 Constraint::Length(3),  // Header
-                Constraint::Min(0),     // Episodes list
+                Constraint::Length(3),  // Filter bar
+                Constraint::Length(1),  // Page info
+                Constraint::Min(0),     // Episodes grid
+                Constraint::Length(1),  // Help text
             ])
             .split(area);
 
         // Header with anime title
-        let header = Paragraph::new(format!("{} - Select Episode to Watch", title))
+        let header_text = if self.episode_filter_mode {
+            format!("{} - Filter Episodes", title)
+        } else {
+            format!("{} - Select Episode to Watch", title)
+        };
+        let header = Paragraph::new(header_text)
             .alignment(Alignment::Center)
             .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
             .block(Block::default().borders(Borders::BOTTOM));
         frame.render_widget(header, chunks[0]);
 
-        // Episodes list
-        let mut lines: Vec<Line> = Vec::new();
-        
-        for (idx, episode) in self.episodes.iter().enumerate() {
-            let is_selected = idx == self.episode_list_scroll;
-            let is_last_watched = last_watched_ep.map(|ep| ep == episode.number).unwrap_or(false);
-            
-            let prefix = if is_selected { "▶ " } else { "  " };
-            let ep_title = episode.title.as_ref()
-                .map(|t| t.clone())
-                .unwrap_or_else(|| format!("Episode {}", episode.number));
-            
-            // Use red color for last watched episodes
-            let style = if is_selected {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-            } else if is_last_watched {
-                Style::default().fg(Color::Red)
-            } else {
-                Style::default()
-            };
+        // Filter bar
+        let filter_prompt = if self.episode_filter_mode { "> " } else { "  " };
+        let filter_text = format!("{}Filter: {}{}", 
+            filter_prompt,
+            self.episode_filter,
+            if self.episode_filter_mode { "_" } else { "" }
+        );
+        let filter_style = if self.episode_filter_mode {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        let filter_widget = Paragraph::new(filter_text)
+            .style(filter_style)
+            .block(Block::default().borders(Borders::ALL));
+        frame.render_widget(filter_widget, chunks[1]);
 
-            // Display episode title or "Episode X" if no title
-            let display_text = if ep_title.starts_with("Episode ") {
-                ep_title.to_string()
-            } else {
-                format!("Episode {}: {}", episode.number, ep_title)
-            };
+        // Page info
+        let page_info = if total_pages > 1 {
+            format!("Page {} of {} (Episodes {}-{} of {})", 
+                current_page + 1, total_pages, 
+                page_start + 1, page_end,
+                total_episodes)
+        } else {
+            format!("Episodes {}-{} of {}", 
+                page_start + 1, page_end, total_episodes)
+        };
+        let page_widget = Paragraph::new(page_info)
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::Cyan));
+        frame.render_widget(page_widget, chunks[2]);
+
+        // Calculate grid dimensions for fullscreen layout
+        let available_width = chunks[3].width as usize;
+        let available_height = chunks[3].height as usize;
+        let cell_width = 11usize; // Width of each episode cell [ XXXX ] with brackets and padding
+        let cell_spacing = 4usize; // More space between cells
+        let max_visible_rows = available_height.saturating_sub(2);
+        
+        // Dynamically calculate number of columns based on available width
+        let cols = ((available_width - 4) / (cell_width + cell_spacing)).max(1).min(10);
+        
+        // Build grid lines - center the grid with selected episode in the middle
+        let mut grid_lines: Vec<Line> = Vec::new();
+        let total_grid_width = cols * cell_width + (cols - 1) * cell_spacing;
+        // Increase left padding to shift grid more to the right
+        let left_padding = ((available_width.saturating_sub(total_grid_width)) / 2) + 10;
+        
+        let max_rows = max_visible_rows;
+        let total_rows = (page_episodes.len() + cols - 1) / cols;
+        let rows_to_show = total_rows.min(max_rows);
+        
+        // Calculate vertical padding to center the grid
+        let vertical_padding = (max_rows.saturating_sub(rows_to_show)) / 2;
+        
+        // Add top padding
+        for _ in 0..vertical_padding {
+            grid_lines.push(Line::from(""));
+        }
+        
+        // Render all episodes in the current page
+        for row in 0..rows_to_show {
+            let mut row_spans: Vec<Span> = Vec::new();
             
-            let mut spans = vec![
-                Span::raw(prefix),
-                Span::styled(display_text, style),
-            ];
-            
-            // Add "*last watched" indicator if this is the last watched episode
-            if is_last_watched {
-                spans.push(Span::styled("  *last watched", Style::default().fg(Color::Red)));
+            // Add left padding to center the grid horizontally
+            if left_padding > 0 {
+                row_spans.push(Span::raw(" ".repeat(left_padding)));
             }
             
-            lines.push(Line::from(spans));
+            for col in 0..cols {
+                let idx = row * cols + col;
+                
+                if let Some((ep_idx, episode)) = page_episodes.get(idx) {
+                    let is_selected = *ep_idx == self.episode_selected_index;
+                    let is_last_watched = last_watched_ep.map(|ep| ep == episode.number).unwrap_or(false);
+                    
+                    // Format episode number with padding for up to 4 digits (e.g., 1156)
+                    let ep_display = format!(" {:>4} ", episode.number);
+                    
+                    // Determine style based on state with better visibility
+                    let (bg_color, fg_color) = if is_selected {
+                        (Color::Yellow, Color::Black)
+                    } else if is_last_watched {
+                        (Color::Red, Color::White)
+                    } else {
+                        (Color::DarkGray, Color::White)
+                    };
+                    
+                    // Create cell with proper styling
+                    let cell_style = Style::default()
+                        .fg(fg_color)
+                        .bg(bg_color)
+                        .add_modifier(Modifier::BOLD);
+                    
+                    // Add spacing between cells
+                    if col > 0 {
+                        row_spans.push(Span::raw(" ".repeat(cell_spacing)));
+                    }
+                    
+                    row_spans.push(Span::styled(
+                        format!("[{}]", ep_display),
+                        cell_style
+                    ));
+                } else {
+                    // Empty cell
+                    if col > 0 {
+                        row_spans.push(Span::raw(" ".repeat(cell_spacing)));
+                    }
+                    row_spans.push(Span::raw(" ".repeat(cell_width)));
+                }
+            }
+            
+            grid_lines.push(Line::from(row_spans));
         }
 
-        if self.episodes.is_empty() {
-            lines.push(Line::from("No episodes available"));
+        // Add bottom padding to fill space
+        while grid_lines.len() < max_rows {
+            grid_lines.push(Line::from(""));
         }
 
-        lines.push(Line::from(""));
-        lines.push(Line::from("↑/↓: Navigate | Enter: Play | Esc: Back"));
+        let grid_widget = Paragraph::new(Text::from(grid_lines))
+            .block(Block::default().borders(Borders::ALL));
+        frame.render_widget(grid_widget, chunks[3]);
 
-        let episodes_widget = Paragraph::new(Text::from(lines))
-            .block(Block::default().borders(Borders::ALL).title(format!("Episodes ({})", self.episodes.len())));
-        frame.render_widget(episodes_widget, chunks[1]);
+        // Help text
+        let help_text = if self.episode_filter_mode {
+            "Type to filter | Esc: Exit filter | Enter: Play"
+        } else if total_pages > 1 {
+            "↑↓: Move Up/Down | ←→: Move Left/Right | PgUp/PgDn: Change Page | /: Filter | Enter: Play | Esc: Back"
+        } else {
+            "↑↓: Move Up/Down | ←→: Move Left/Right | /: Filter | Enter: Play | Esc: Back"
+        };
+        let help_widget = Paragraph::new(help_text)
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::Gray));
+        frame.render_widget(help_widget, chunks[4]);
     }
 
     fn draw_player(&mut self, frame: &mut Frame) {
@@ -697,30 +872,47 @@ impl App {
 
     fn draw_control_overlay(&self, frame: &mut Frame, area: Rect) {
         let controls = vec![
-            ("Next Episode", "n", self.player_controller.has_next_episode()),
-            ("Previous Episode", "p", self.player_controller.has_previous_episode()),
-            ("Choose Episode", "e", true),
-            ("Download", "d", false), // TODO: implement download
-            ("Back to Menu", "b", true),
+            ("Next Episode", self.player_controller.has_next_episode()),
+            ("Previous Episode", self.player_controller.has_previous_episode()),
+            ("Choose Episode", true),
+            ("Back to Menu", true),
         ];
 
-        let mut lines: Vec<Line> = vec![
+        let title = format!("{} - Episode {}/{}",
+            self.player_controller.anime_title().unwrap_or("Unknown"),
+            self.player_controller.episode_number(),
+            self.player_controller.total_episodes()
+        );
+
+        let title_lines: Vec<Line> = vec![
+            Line::from(""),
             Line::from(vec![
                 Span::styled(
-                    format!("{} - Episode {}/{}",
-                        self.player_controller.anime_title().unwrap_or("Unknown"),
-                        self.player_controller.episode_number(),
-                        self.player_controller.total_episodes()
-                    ),
+                    title.clone(),
                     Style::default()
                         .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
+                        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
                 ),
             ]),
             Line::from(""),
         ];
 
-        for (idx, (label, key, enabled)) in controls.iter().enumerate() {
+        let control_height = controls.len() + 4; // title + controls + padding
+        let available_height = area.height as usize;
+        let vertical_padding = (available_height.saturating_sub(control_height)) / 2;
+        
+        let mut all_lines: Vec<Line> = Vec::new();
+        
+        // Add top padding
+        for _ in 0..vertical_padding {
+            all_lines.push(Line::from(""));
+        }
+        
+        // Add title
+        all_lines.extend(title_lines);
+        
+        // Add controls with bigger text
+        for (idx, (label, enabled)) in controls.iter().enumerate() {
             let is_selected = idx == self.player_controller.selected_control();
             
             let style = if !enabled {
@@ -728,24 +920,28 @@ impl App {
             } else if is_selected {
                 Style::default()
                     .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::BOLD | Modifier::REVERSED)
             } else {
-                Style::default()
+                Style::default().add_modifier(Modifier::BOLD)
             };
 
-            let prefix = if is_selected { "▶ " } else { "  " };
+            let prefix = if is_selected { " ▶ " } else { "   " };
 
-            lines.push(Line::from(vec![
-                Span::styled(format!("{}[{}] ", prefix, key), style),
-                Span::styled(*label, style),
+            all_lines.push(Line::from(vec![
+                Span::styled(format!("{}{}", prefix, label), style),
             ]));
+        }
+        
+        // Add bottom padding
+        while all_lines.len() < available_height.saturating_sub(2) {
+            all_lines.push(Line::from(""));
         }
 
         let block = Block::default()
             .borders(Borders::ALL)
             .title("Controls (auto-hide in 5s)");
 
-        let paragraph = Paragraph::new(Text::from(lines))
+        let paragraph = Paragraph::new(Text::from(all_lines))
             .block(block)
             .alignment(Alignment::Center);
 
@@ -869,31 +1065,140 @@ impl App {
         &mut self,
         key: KeyCode,
     ) -> Result<()> {
+        let total_episodes = self.episodes.len();
+        
+        // Handle filter mode
+        if self.episode_filter_mode {
+            match key {
+                KeyCode::Esc => {
+                    self.episode_filter_mode = false;
+                    self.episode_filter.clear();
+                    // Reset to first episode when exiting filter
+                    self.episode_selected_index = 0;
+                }
+                KeyCode::Backspace => {
+                    self.episode_filter.pop();
+                }
+                KeyCode::Char(c) => {
+                    // Only accept numeric input for episode filtering
+                    if c.is_numeric() {
+                        self.episode_filter.push(c);
+                    }
+                }
+                KeyCode::Enter => {
+                    // Try to jump to episode number
+                    if let Ok(ep_num) = self.episode_filter.parse::<u32>() {
+                        // Find episode with matching number
+                        if let Some((idx, _)) = self.episodes.iter().enumerate()
+                            .find(|(_, ep)| ep.number == ep_num) {
+                            self.episode_selected_index = idx;
+                            // Update page to show selected episode
+                            self.episode_current_page = idx / self.episodes_per_page;
+                        }
+                    }
+                    self.episode_filter_mode = false;
+                    self.episode_filter.clear();
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+        
+        // Normal navigation mode with pagination
+        let total_pages = (total_episodes + self.episodes_per_page - 1) / self.episodes_per_page;
+        
+        // Calculate number of columns based on terminal width (same as draw function)
+        let available_width = 76usize;
+        let cell_width = 9usize;
+        let cell_spacing = 3usize;
+        let cols = ((available_width - 4) / (cell_width + cell_spacing)).max(1).min(10);
+        
         match key {
             KeyCode::Esc | KeyCode::Char('b') => {
                 // Go back to previous screen (Dashboard or Search)
                 let target = self.previous_screen.take().unwrap_or(Screen::Home);
                 self.current_screen = target;
                 self.episodes.clear();
+                self.episode_selected_index = 0;
+                self.episode_current_page = 0;
+                self.episode_filter.clear();
+                self.episode_filter_mode = false;
             }
             KeyCode::Up => {
-                if self.episode_list_scroll > 0 {
-                    self.episode_list_scroll -= 1;
+                // Move up one row (subtract columns)
+                if self.episode_selected_index >= cols {
+                    self.episode_selected_index -= cols;
+                    // Update page to show selected episode
+                    self.episode_current_page = self.episode_selected_index / self.episodes_per_page;
                 }
             }
             KeyCode::Down => {
-                if self.episode_list_scroll < self.episodes.len().saturating_sub(1) {
-                    self.episode_list_scroll += 1;
+                // Move down one row (add columns)
+                if self.episode_selected_index + cols < total_episodes {
+                    self.episode_selected_index += cols;
+                    // Update page to show selected episode
+                    self.episode_current_page = self.episode_selected_index / self.episodes_per_page;
                 }
+            }
+            KeyCode::Left => {
+                // Move left one column
+                if self.episode_selected_index > 0 {
+                    self.episode_selected_index -= 1;
+                    // Update page to show selected episode
+                    self.episode_current_page = self.episode_selected_index / self.episodes_per_page;
+                }
+            }
+            KeyCode::Right => {
+                // Move right one column
+                if self.episode_selected_index < total_episodes.saturating_sub(1) {
+                    self.episode_selected_index += 1;
+                    // Update page to show selected episode
+                    self.episode_current_page = self.episode_selected_index / self.episodes_per_page;
+                }
+            }
+            KeyCode::PageUp => {
+                // Go to previous page
+                if self.episode_current_page > 0 {
+                    self.episode_current_page -= 1;
+                    // Set selection to first episode of new page
+                    self.episode_selected_index = self.episode_current_page * self.episodes_per_page;
+                }
+            }
+            KeyCode::PageDown => {
+                // Go to next page
+                if self.episode_current_page + 1 < total_pages {
+                    self.episode_current_page += 1;
+                    // Set selection to first episode of new page
+                    self.episode_selected_index = self.episode_current_page * self.episodes_per_page;
+                }
+            }
+            KeyCode::Home => {
+                // Go to first episode
+                self.episode_selected_index = 0;
+                self.episode_current_page = 0;
+            }
+            KeyCode::End => {
+                // Go to last episode
+                self.episode_selected_index = total_episodes.saturating_sub(1);
+                self.episode_current_page = (total_episodes - 1) / self.episodes_per_page;
+            }
+            KeyCode::Char('/') => {
+                self.episode_filter_mode = true;
+                self.episode_filter.clear();
+            }
+            KeyCode::Char(c) if c.is_numeric() => {
+                // Quick jump: type episode number and press Enter
+                self.episode_filter.push(c);
+                self.episode_filter_mode = true;
             }
             KeyCode::Enter => {
                 // Play selected episode
-                if let Some(anime) = self.selected_anime.as_ref().map(|a| a.base.clone()) {
-                    if self.episode_list_scroll < self.episodes.len() {
+                if self.episode_selected_index < total_episodes {
+                    if let Some(anime) = self.selected_anime.as_ref().map(|a| a.base.clone()) {
                         self.player_controller.start_playback(
                             anime,
                             self.episodes.clone(),
-                            self.episode_list_scroll,
+                            self.episode_selected_index,
                         );
                         self.current_screen = Screen::Player;
                         self.play_current_episode().await;
@@ -1055,6 +1360,36 @@ impl App {
                 self.current_image_data = None;
             }
         }
+    }
+
+    /// Load metadata in background after splash screen
+    async fn load_metadata_in_background(&mut self) {
+        // This runs in background, doesn't block UI
+        let history_items: Vec<_> = self.continue_watching.clone();
+        
+        for history in &history_items {
+            let parts: Vec<&str> = history.anime_id.split(':').collect();
+            if parts.len() >= 2 {
+                let provider = parts[0];
+                let anime_id = parts[1];
+                
+                // Get episode count from provider directly
+                if let Some(provider_obj) = self.providers.get_provider(provider) {
+                    match provider_obj.get_episodes(anime_id).await {
+                        Ok(episodes) => {
+                            let key = format!("{}:{}", provider, anime_id);
+                            self.continue_watching_metadata.insert(key, episodes.len() as u32);
+                            tracing::debug!("Loaded {} episodes for {}", episodes.len(), history.title);
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to load episodes for {}: {}", history.title, e);
+                        }
+                    }
+                }
+            }
+        }
+        
+        tracing::info!("Background metadata loading complete for {} items", self.continue_watching_metadata.len());
     }
 
     async fn handle_search_key(
@@ -1274,9 +1609,6 @@ impl App {
                 self.show_episode_list = true;
                 self.episode_list_scroll = self.player_controller.current_episode_idx();
             }
-            ControlAction::Download => {
-                self.show_toast("Download not yet implemented".to_string(), 3);
-            }
             ControlAction::BackToMenu => {
                 self.current_screen = Screen::Home;
                 self.player_controller = PlayerController::new();
@@ -1403,10 +1735,17 @@ impl App {
                     tracing::info!("Loaded {} episodes", episodes.len());
                     self.episodes = episodes;
                     if !self.episodes.is_empty() {
-                        // Set scroll position to last watched episode, or 0 if not found
-                        self.episode_list_scroll = last_watched_ep
+                        // Set selection to last watched episode, or 0 if not found
+                        self.episode_selected_index = last_watched_ep
                             .and_then(|ep| self.episodes.iter().position(|e| e.number == ep))
                             .unwrap_or(0);
+                        // Calculate which page the selected episode is on
+                        self.episode_current_page = self.episode_selected_index / self.episodes_per_page;
+                        // Also set legacy scroll for compatibility
+                        self.episode_list_scroll = self.episode_selected_index;
+                        // Reset filter state
+                        self.episode_filter.clear();
+                        self.episode_filter_mode = false;
                         // Save current screen for back navigation
                         self.previous_screen = Some(self.current_screen);
                         self.current_screen = Screen::EpisodeSelect;
@@ -1488,8 +1827,13 @@ impl App {
         // Update splash screen
         if self.current_screen == Screen::Splash {
             self.splash_screen.tick();
+            // Note: Metadata loading moved to background task after splash screen
             if self.splash_screen.is_complete(self.splash_start.elapsed().as_millis() as u64) {
                 self.current_screen = Screen::SourceSelect;
+                // Start metadata loading in background after splash
+                if !self.continue_watching.is_empty() && self.continue_watching_metadata.is_empty() {
+                    self.load_metadata_in_background().await;
+                }
             }
             return Ok(());
         }
@@ -1529,7 +1873,7 @@ impl App {
             self.load_preview().await;
         }
 
-        // Smart auto-search with debounce
+        // Smart auto-search with debounce (0.5 seconds)
         if self.search_pending && self.current_screen == Screen::Search {
             // Check if 500ms has passed since last keypress
             if self.last_keypress.elapsed().as_millis() >= 500 {

@@ -22,7 +22,6 @@ pub enum ControlAction {
     NextEpisode,
     PreviousEpisode,
     ChooseEpisode,
-    Download,
     BackToMenu,
 }
 
@@ -30,7 +29,6 @@ const CONTROLS: &[(ControlAction, &str, char)] = &[
     (ControlAction::NextEpisode, "Next Episode", 'n'),
     (ControlAction::PreviousEpisode, "Previous Episode", 'p'),
     (ControlAction::ChooseEpisode, "Choose Episode", 'e'),
-    (ControlAction::Download, "Download", 'd'),
     (ControlAction::BackToMenu, "Back to Menu", 'b'),
 ];
 
