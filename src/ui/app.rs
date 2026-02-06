@@ -737,7 +737,7 @@ impl App {
         let available_width = chunks[3].width as usize;
         let available_height = chunks[3].height as usize;
         let cell_width = 11usize; // Width of each episode cell [ XXXX ] with brackets and padding
-        let cell_spacing = 4usize; // More space between cells
+        let cell_spacing = 6usize; // More space between cells
         let max_visible_rows = available_height.saturating_sub(2);
         
         // Dynamically calculate number of columns based on available width
@@ -747,7 +747,7 @@ impl App {
         let mut grid_lines: Vec<Line> = Vec::new();
         let total_grid_width = cols * cell_width + (cols - 1) * cell_spacing;
         // Increase left padding to shift grid more to the right
-        let left_padding = ((available_width.saturating_sub(total_grid_width)) / 2) + 10;
+        let left_padding = ((available_width.saturating_sub(total_grid_width)) / 2) + 15;
         
         let max_rows = max_visible_rows;
         let total_rows = (page_episodes.len() + cols - 1) / cols;
