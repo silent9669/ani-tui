@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.5.0] - 2025-02-06
+
+### Added
+- **Pagination**: Episode selection now shows 100 episodes per page with PageUp/PageDown navigation
+- **Grid Layout**: 10-column episode grid for better visual organization
+- **Episode Filter**: Press '/' to filter episodes by number
+- **Background Metadata Loading**: Total episode counts loaded after splash screen
+- **Image Renderer**: Multi-protocol image rendering system (Kitty, iTerm2, Sixel)
+- **Enhanced Navigation**: Arrow keys for grid navigation (Up/Down by rows, Left/Right by columns)
+
+### Changed
+- **Dashboard Layout**: Left panel shows anime names, right panel shows episode metadata
+- **Episode Selection UI**: Centered grid with improved spacing and visibility
+- **Video Controls**: Removed download option, centered layout, arrow key navigation
+- **Search Performance**: Optimized debounce to 500ms for faster response
+- **Anime Names**: Larger, bold text with better spacing in dashboard
+
+### Fixed
+- Episode grid rendering issues
+- Navigation key bindings for episode selection
+- Grid centering and positioning
+
+### Notes
+- Image preview temporarily disabled (requires terminal protocol debugging)
+- All core features work without external dependencies
+
 ## [0.2.0] - 2025-01-30
 
 ### Added
