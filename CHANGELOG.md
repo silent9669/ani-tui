@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.6.1] - 2025-02-07
+
+### Added
+- **Windows Terminal 1.22+ Support**: Automatic detection and iTerm2 protocol support for future Windows Terminal versions
+- **Comprehensive Image Documentation**: Added `docs/IMAGE_RENDERING.md` with implementation details and troubleshooting
+
+### Changed
+- **Image Size**: Increased by 90% (1.9x multiplier) for better visibility
+- **Splash Screen**: Reduced from 2s to 0.8s with faster progress animation (13% per tick)
+- **Video Player Controls**: Complete redesign with horizontal layout
+  - Layout: Previous | Next (centered) | Choose | Back
+  - Visible keybinds: [P], [N], [E], [ESC]
+  - Flexible navigation: ← → or ↑ ↓ arrows
+  - ESC key for returning to dashboard
+  - No border box for cleaner look
+- **Default Selection**: Next Episode is now auto-selected when controls appear
+- **Cross-Platform Consistency**: Same features work on macOS (iTerm2) and Windows (Sixel)
+
+### Fixed
+- **Image Clearing**: Fixed iTerm2 image persistence issues on screen transitions
+- **Search Entry**: Dashboard image now clears immediately when entering search mode
+- **Removed Intermediate Screen**: Video player shows controls immediately instead of "Video playing..." screen
+- **Unit Tests**: Updated for new image sizing calculations
+
+### Technical
+- **Version**: Bumped to v3.6.1 across all files
+- **CI/CD**: Automatic homebrew-tap updates on release
+- **Protocol Detection**: Enhanced Windows Terminal version checking
+
 ## [3.5.0] - 2025-02-06
 
 ### Added

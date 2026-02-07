@@ -255,8 +255,20 @@ impl ImageRenderer {
             return Protocol::Kitty;
         }
 
-        // 7. Windows Terminal - Sixel support (requires chafa)
+        // 7. Windows Terminal - Check for iTerm2 support (v1.22+) or fallback to Sixel
         if wt_session {
+            // Windows Terminal 1.22+ supports iTerm2 inline images
+            if let Ok(version) = std::env::var("WT_VERSION") {
+                if Self::is_windows_terminal_modern(&version) {
+                    tracing::info!(
+                        "Detected Windows Terminal {} - using iTerm2 protocol",
+                        version
+                    );
+                    return Protocol::Iterm2;
+                }
+            }
+
+            // Fallback to Sixel for older Windows Terminal versions
             if Self::is_chafa_available() {
                 tracing::info!("Detected Windows Terminal - using Sixel via chafa");
                 return Protocol::Sixel;
@@ -283,6 +295,18 @@ impl ImageRenderer {
             .status()
             .map(|s| s.success())
             .unwrap_or(false)
+    }
+
+    /// Check if Windows Terminal version supports iTerm2 protocol (v1.22+)
+    fn is_windows_terminal_modern(version: &str) -> bool {
+        // Parse version like "1.22.10352.0"
+        let parts: Vec<&str> = version.split('.').collect();
+        if parts.len() >= 2 {
+            if let (Ok(major), Ok(minor)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
+                return major > 1 || (major == 1 && minor >= 22);
+            }
+        }
+        false
     }
 
     /// Render an image to the terminal

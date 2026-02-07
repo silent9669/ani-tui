@@ -66,7 +66,7 @@ impl SplashScreen {
             .fg(accent_color)
             .add_modifier(Modifier::DIM);
 
-        let version_text = Paragraph::new("v3.6.0")
+        let version_text = Paragraph::new("v3.6.1")
             .alignment(Alignment::Center)
             .style(version_style);
         frame.render_widget(version_text, chunks[2]);
