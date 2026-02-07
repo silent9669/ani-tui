@@ -1,11 +1,13 @@
 use anyhow::Result;
 use base64::{engine::general_purpose, Engine as _};
+use crossterm::cursor::MoveTo;
+use crossterm::queue;
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
     text::{Line, Span},
 };
-use std::io::Write;
+use std::io::{self, Write};
 use std::process::{Command, Stdio};
 
 /// Supported image rendering protocols
@@ -15,7 +17,7 @@ pub enum Protocol {
     Kitty,
     /// iTerm2 inline images (macOS)
     Iterm2,
-    /// Sixel graphics (Windows Terminal via chafa)
+    /// Sixel graphics (via chafa - works on most modern terminals)
     Sixel,
     /// No image support (Terminal.app)
     None,
@@ -27,7 +29,7 @@ impl Protocol {
         match self {
             Protocol::Kitty => "Kitty Graphics Protocol",
             Protocol::Iterm2 => "iTerm2 Inline Images",
-            Protocol::Sixel => "Sixel Graphics",
+            Protocol::Sixel => "Sixel Graphics (chafa)",
             Protocol::None => "None",
         }
     }
@@ -75,7 +77,7 @@ impl ImageError {
                 vec![
                     Line::from(""),
                     Line::from(vec![Span::styled(
-                        "⚠️  Images not supported",
+                        "⚠️ Images not supported",
                         Style::default().fg(Color::Yellow),
                     )]),
                     Line::from(""),
@@ -83,14 +85,21 @@ impl ImageError {
                     Line::from(""),
                     Line::from("This terminal cannot display images."),
                     Line::from(""),
-                    Line::from("Recommended alternatives:"),
+                    Line::from("Recommended terminals:"),
                     Line::from(vec![
-                        Span::raw("• macOS: "),
-                        Span::styled("Warp", Style::default().fg(Color::Green)),
+                        Span::raw("  macOS: "),
+                        Span::styled("Warp, iTerm2, Kitty", Style::default().fg(Color::Green)),
                     ]),
                     Line::from(vec![
-                        Span::raw("• Windows: "),
+                        Span::raw("  Windows: "),
                         Span::styled("Windows Terminal", Style::default().fg(Color::Green)),
+                    ]),
+                    Line::from(vec![
+                        Span::raw("  Linux: "),
+                        Span::styled(
+                            "Kitty, WezTerm, GNOME Terminal",
+                            Style::default().fg(Color::Green),
+                        ),
                     ]),
                 ]
             }
@@ -98,7 +107,7 @@ impl ImageError {
                 vec![
                     Line::from(""),
                     Line::from(vec![Span::styled(
-                        "⚠️  chafa not found",
+                        "⚠️ chafa not found",
                         Style::default().fg(Color::Yellow),
                     )]),
                     Line::from(""),
@@ -125,7 +134,7 @@ impl ImageError {
                 vec![
                     Line::from(""),
                     Line::from(vec![Span::styled(
-                        "⚠️  Invalid image data",
+                        "⚠️ Invalid image data",
                         Style::default().fg(Color::Red),
                     )]),
                     Line::from(format!("Error: {}", msg)),
@@ -135,7 +144,7 @@ impl ImageError {
                 vec![
                     Line::from(""),
                     Line::from(vec![Span::styled(
-                        "⚠️  Failed to render image",
+                        "⚠️ Failed to render image",
                         Style::default().fg(Color::Red),
                     )]),
                     Line::from(format!("Error: {}", msg)),
@@ -145,7 +154,7 @@ impl ImageError {
                 vec![
                     Line::from(""),
                     Line::from(vec![Span::styled(
-                        "⚠️  Terminal too small",
+                        "⚠️ Terminal too small",
                         Style::default().fg(Color::Yellow),
                     )]),
                     Line::from("Resize terminal to see image preview"),
@@ -158,8 +167,12 @@ impl ImageError {
 /// Image renderer that auto-detects terminal capabilities
 pub struct ImageRenderer {
     protocol: Protocol,
-    sixel_cache: Option<String>,
-    kitty_image_id: u32,
+    sixel_cache: Option<Vec<u8>>,
+    last_kitty_image_id: Option<u32>,
+    // State tracking to prevent re-rendering
+    last_rendered_hash: Option<u64>,
+    last_rendered_area: Option<Rect>,
+    last_image_data: Option<Vec<u8>>,
 }
 
 impl ImageRenderer {
@@ -171,7 +184,10 @@ impl ImageRenderer {
         Self {
             protocol,
             sixel_cache: None,
-            kitty_image_id: 1,
+            last_kitty_image_id: None,
+            last_rendered_hash: None,
+            last_rendered_area: None,
+            last_image_data: None,
         }
     }
 
@@ -182,60 +198,76 @@ impl ImageRenderer {
 
     /// Auto-detect the best available protocol
     ///
-    /// Note: We prefer Sixel when available because it renders as text lines
-    /// that integrate well with ratatui's frame-based rendering.
-    /// Kitty/iTerm2 protocols output escape codes directly to stdout which
-    /// can disrupt the TUI layout.
+    /// Protocol priority based on terminal compatibility research:
+    /// - iTerm2 protocol: Widely supported (iTerm2, Warp, WezTerm, VSCode)
+    /// - Kitty protocol: Best quality but limited support (Kitty, Ghostty)
+    /// - Sixel: Good fallback via chafa (Windows Terminal, foot, etc.)
     fn detect_protocol() -> Protocol {
         let term = std::env::var("TERM").unwrap_or_default();
         let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
+        let warp_session = std::env::var("WARP_SESSION_ID").is_ok();
+        let kitty_window_id = std::env::var("KITTY_WINDOW_ID").is_ok();
+        let wt_session = std::env::var("WT_SESSION").is_ok();
 
         tracing::debug!(
-            "Terminal detection - TERM: {}, TERM_PROGRAM: {}",
+            "Terminal detection - TERM: {}, TERM_PROGRAM: {}, WARP_SESSION: {}, KITTY_WINDOW_ID: {}, WT_SESSION: {}",
             term,
-            term_program
+            term_program,
+            warp_session,
+            kitty_window_id,
+            wt_session
         );
 
-        // 1. Check for Terminal.app (no image support)
+        // 1. Terminal.app - no image support at all
         if term_program == "Apple_Terminal" {
             tracing::warn!("Detected Terminal.app - no image support");
             return Protocol::None;
         }
 
-        // 2. Prefer Sixel via chafa when available (best integration with ratatui)
-        // This works on Windows Terminal, most Linux terminals, and many modern terminals
-        if Self::is_chafa_available() {
-            // Check if this is a terminal known to support Sixel well
-            if term_program == "WarpTerminal"
-                || term_program == "warp"
-                || term == "xterm-kitty"
-                || std::env::var("KITTY_WINDOW_ID").is_ok()
-                || term_program == "WezTerm"
-                || term_program == "ghostty"
-                || term_program == "Ghostty"
-                || cfg!(target_os = "windows")
-                || std::env::var("WT_SESSION").is_ok()
-            {
-                tracing::info!("Detected terminal with Sixel support via chafa");
-                return Protocol::Sixel;
-            }
-
-            // Default to Sixel for any terminal when chafa is available
-            // (Sixel is widely supported in modern terminals)
-            tracing::info!("Using Sixel protocol via chafa");
-            return Protocol::Sixel;
+        // 2. iTerm2 - native iTerm2 protocol support
+        if term_program == "iTerm.app" {
+            tracing::info!("Detected iTerm2 - using iTerm2 protocol");
+            return Protocol::Iterm2;
         }
 
-        // 3. Fallback to Kitty protocol for Kitty terminal (if chafa not available)
-        if term == "xterm-kitty" || std::env::var("KITTY_WINDOW_ID").is_ok() {
-            tracing::info!("Detected Kitty terminal (chafa not available)");
+        // 3. Warp - use iTerm2 protocol for better compatibility
+        // iTerm2 is stateless and doesn't have the corruption issues Kitty has in Warp
+        if term_program == "WarpTerminal" || warp_session {
+            tracing::info!("Detected Warp terminal - using iTerm2 protocol");
+            return Protocol::Iterm2;
+        }
+
+        // 4. WezTerm - uses iTerm2 protocol (has issues with Kitty)
+        if term_program == "WezTerm" {
+            tracing::info!("Detected WezTerm - using iTerm2 protocol");
+            return Protocol::Iterm2;
+        }
+
+        // 5. Kitty terminal - native Kitty protocol
+        if term == "xterm-kitty" || kitty_window_id {
+            tracing::info!("Detected Kitty terminal - using Kitty protocol");
             return Protocol::Kitty;
         }
 
-        // 4. Fallback to iTerm2 for iTerm (if chafa not available)
-        if term_program == "iTerm.app" {
-            tracing::info!("Detected iTerm2 (chafa not available)");
-            return Protocol::Iterm2;
+        // 6. Ghostty - supports Kitty protocol with unicode placeholders
+        if term_program == "Ghostty" || term_program == "ghostty" {
+            tracing::info!("Detected Ghostty - using Kitty protocol");
+            return Protocol::Kitty;
+        }
+
+        // 7. Windows Terminal - Sixel support (requires chafa)
+        if wt_session {
+            if Self::is_chafa_available() {
+                tracing::info!("Detected Windows Terminal - using Sixel via chafa");
+                return Protocol::Sixel;
+            }
+            tracing::warn!("Windows Terminal detected but chafa not installed");
+        }
+
+        // 8. Other terminals - try Sixel via chafa as fallback
+        if Self::is_chafa_available() {
+            tracing::info!("Using Sixel protocol via chafa as fallback");
+            return Protocol::Sixel;
         }
 
         tracing::warn!("No image protocol available (install chafa for best compatibility)");
@@ -255,8 +287,8 @@ impl ImageRenderer {
 
     /// Render an image to the terminal
     ///
-    /// Returns Ok(None) if image was rendered via escape codes (Kitty, iTerm2)
-    /// Returns Ok(Some(lines)) for Sixel or error display
+    /// Returns Ok(None) if image was rendered successfully
+    /// Returns Err if rendering failed
     pub fn render(
         &mut self,
         image_data: &[u8],
@@ -279,24 +311,68 @@ impl ImageRenderer {
             return Err(ImageError::TerminalTooSmall);
         }
 
-        match self.protocol {
+        // Calculate hash of current image data
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        image_data.hash(&mut hasher);
+        let current_hash = hasher.finish();
+
+        // Check if we need to render (first time or image/area changed)
+        // Note: iTerm2 and Sixel protocols don't persist across TUI redraws
+        // Kitty protocol persists in terminal memory, so we can skip re-renders
+        let should_render = match self.protocol {
+            Protocol::Iterm2 | Protocol::Sixel => {
+                // iTerm2 and Sixel images disappear on screen clear, always re-render
+                true
+            }
+            _ => {
+                // For Kitty, check if we already rendered this image
+                match (&self.last_rendered_hash, &self.last_rendered_area) {
+                    (Some(last_hash), Some(last_area)) => {
+                        *last_hash != current_hash || *last_area != area
+                    }
+                    _ => true, // First time rendering
+                }
+            }
+        };
+
+        if !should_render {
+            tracing::debug!("Skipping image render - already rendered at this position");
+            return Ok(None);
+        }
+
+        tracing::debug!("Rendering image (hash: {}, area: {:?})", current_hash, area);
+
+        // Render based on protocol
+        let result = match self.protocol {
             Protocol::Kitty => {
                 self.render_kitty(image_data, area)?;
-                Ok(None) // Image rendered via escape codes
+                Ok(None)
             }
             Protocol::Iterm2 => {
                 self.render_iterm2(image_data, area)?;
-                Ok(None) // Image rendered via escape codes
+                Ok(None)
             }
             Protocol::Sixel => {
-                let lines = self.render_sixel(image_data, area)?;
-                Ok(Some(lines))
+                self.render_sixel(image_data, area)?;
+                Ok(None)
             }
             Protocol::None => {
                 let term = std::env::var("TERM_PROGRAM").unwrap_or_else(|_| "Unknown".to_string());
                 Err(ImageError::ProtocolNotSupported(term))
             }
+        };
+
+        // Update state tracking on successful render
+        if result.is_ok() {
+            self.last_rendered_hash = Some(current_hash);
+            self.last_rendered_area = Some(area);
+            self.last_image_data = Some(image_data.to_vec());
+            tracing::debug!("Image rendered successfully, state updated");
         }
+
+        result
     }
 
     /// Validate image format by checking magic bytes
@@ -315,12 +391,12 @@ impl ImageRenderer {
         is_png || is_jpeg || is_webp || is_gif || is_bmp
     }
 
-    /// Render using Kitty graphics protocol
+    /// Render using Kitty graphics protocol with cursor-relative positioning
     ///
-    /// Format: ESC _G<control_data>;<payload>ESC \
+    /// Uses fixed image ID to prevent accumulation and centers image in the allocated area
     fn render_kitty(&mut self, image_data: &[u8], area: Rect) -> Result<(), ImageError> {
-        let image_id = self.kitty_image_id;
-        self.kitty_image_id = self.kitty_image_id.wrapping_add(1);
+        // Use fixed image ID (always 1) to prevent accumulation and stacking
+        let image_id = 1u32;
 
         // Get image dimensions
         let (img_width, img_height) = self.get_image_dimensions(image_data)?;
@@ -333,21 +409,17 @@ impl ImageRenderer {
             area.height as u32,
         );
 
-        // For Kitty protocol, we need to output escape codes directly to stdout
-        // We'll use PNG format (f=100) for best compatibility
-
-        let stdout = std::io::stdout();
+        let stdout = io::stdout();
         let mut handle = stdout.lock();
 
-        // First, delete any existing image with this ID to avoid conflicts
-        let delete_cmd = format!("\x1b_Ga=d,d=i,i={}\x1b\\", image_id);
+        // Clear ALL previous images to prevent stacking/duplication
+        // q=2: suppress all responses to prevent breaking keyboard input
+        let clear_all_cmd = "\x1b_Ga=d,d=A,q=2\x1b\\";
         handle
-            .write_all(delete_cmd.as_bytes())
+            .write_all(clear_all_cmd.as_bytes())
             .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
 
         // Send image data in chunks
-        // Format: ESC _Gf=100,i=<id>,s=<w>,v=<h>,a=T;<base64_data>ESC \
-
         let base64_data = general_purpose::STANDARD.encode(image_data);
         let chunk_size = 4096;
         let chunks: Vec<&str> = base64_data
@@ -361,8 +433,13 @@ impl ImageRenderer {
             let is_last = i == chunks.len() - 1;
 
             let control = if is_first {
+                // t=d: direct transmission (data in payload)
+                // f=100: PNG format (we send raw image data)
+                // a=T: transmit action
+                // m=1: more chunks coming
+                // q=2: suppress all responses to prevent breaking keyboard input
                 format!(
-                    "f=100,i={},s={},v={},a=T,m={}",
+                    "a=T,t=d,f=100,i={},s={},v={},m={},q=2",
                     image_id,
                     img_width,
                     img_height,
@@ -378,10 +455,19 @@ impl ImageRenderer {
                 .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
         }
 
-        // Create placement at cursor position
-        // ESC _Ga=p,i=<id>,c=<cols>,r=<rows>ESC \
+        // Calculate center position within the area
+        let start_x = area.x + (area.width.saturating_sub(display_cols as u16)) / 2;
+        let start_y = area.y + (area.height.saturating_sub(display_rows as u16)) / 2;
+
+        // Position cursor at the calculated center position
+        queue!(handle, MoveTo(start_x, start_y))
+            .map_err(|e| ImageError::RenderFailed(format!("Failed to position cursor: {}", e)))?;
+
+        // Create placement at cursor position (no U/V parameters)
+        // C=1: do not move cursor after placement
+        // q=2: suppress all responses to prevent breaking keyboard input
         let place_cmd = format!(
-            "\x1b_Ga=p,i={},c={},r={}\x1b\\",
+            "\x1b_Ga=p,i={},c={},r={},C=1,q=2\x1b\\",
             image_id, display_cols, display_rows
         );
         handle
@@ -392,42 +478,101 @@ impl ImageRenderer {
             .flush()
             .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
 
+        // Update state tracking
+        self.last_kitty_image_id = Some(image_id);
+
         tracing::debug!(
-            "Rendered image {} via Kitty protocol ({}x{} cells)",
+            "Rendered image {} via Kitty protocol at ({},{}) size {}x{} (centered in area {:?})",
             image_id,
+            start_x,
+            start_y,
             display_cols,
-            display_rows
+            display_rows,
+            area
         );
 
         Ok(())
     }
 
+    /// Clear the image area by filling with spaces
     /// Render using iTerm2 inline images protocol
-    ///
-    /// Format: ESC ] 1337 ; File=<params>:<base64_data> BEL
+    /// Optimized for Warp terminal compatibility
     fn render_iterm2(&self, image_data: &[u8], area: Rect) -> Result<(), ImageError> {
+        // Margin from all sides for consistent spacing
+        const MARGIN: u16 = 3;
+        // Size increase factor (1.3 = 30% bigger)
+        const SIZE_INCREASE: f32 = 1.9;
+
         // Get image dimensions
         let (img_width, img_height) = self.get_image_dimensions(image_data)?;
 
-        // Calculate display size
-        let (display_cols, display_rows) = self.calculate_display_size(
+        // Calculate available space after margins
+        let available_width = area.width.saturating_sub(MARGIN * 2);
+        let available_height = area.height.saturating_sub(MARGIN * 2);
+
+        // Calculate base display size within available space
+        let (base_cols, base_rows) = self.calculate_display_size(
             img_width,
             img_height,
-            area.width as u32,
-            area.height as u32,
+            available_width as u32,
+            available_height as u32,
         );
+
+        // Increase size by 90%
+        let display_cols = ((base_cols as f32) * SIZE_INCREASE) as u32;
+        let display_rows = ((base_rows as f32) * SIZE_INCREASE) as u32;
+
+        // Cap at available space (respect margins)
+        let display_cols = display_cols.min(available_width as u32);
+        let display_rows = display_rows.min(available_height as u32);
+
+        // Standard terminal cell size: 8x16 pixels
+        let cell_width = 8u32;
+        let cell_height = 16u32;
+        let display_width_px = display_cols * cell_width;
+        let display_height_px = display_rows * cell_height;
+
+        // Position with margin from top/left, centered in remaining space
+        let start_x = area.x + MARGIN + (available_width - display_cols as u16) / 2;
+        let start_y = area.y + MARGIN + (available_height - display_rows as u16) / 2;
 
         let base64_data = general_purpose::STANDARD.encode(image_data);
 
-        // iTerm2 OSC 1337 format
-        // ESC ] 1337 ; File=inline=1,width=<w>,height=<h>:<base64> BEL
+        // iTerm2 OSC 1337 format with all necessary parameters
+        // inline=1: display inline
+        // size: file size for integrity checking
+        // width/height: dimensions in pixels
+        // preserveAspectRatio=1: maintain aspect ratio
+        // doNotMoveCursor=1: don't advance cursor after image
         let osc = format!(
-            "\x1b]1337;File=inline=1,width={},height={},preserveAspectRatio=1:{}\x07",
-            display_cols, display_rows, base64_data
+            "\x1b]1337;File=inline=1;size={};width={}px;height={}px;preserveAspectRatio=1;doNotMoveCursor=1:{}\x07",
+            image_data.len(),
+            display_width_px,
+            display_height_px,
+            base64_data
         );
 
-        let stdout = std::io::stdout();
+        let stdout = io::stdout();
         let mut handle = stdout.lock();
+
+        // CRITICAL FIX: Clear the image area with spaces to prevent stacking
+        // iTerm2 images don't auto-clear, so we must overwrite the area
+        for row in area.y..area.y + area.height {
+            queue!(handle, MoveTo(area.x, row)).map_err(|e| {
+                ImageError::RenderFailed(format!("Failed to position cursor: {}", e))
+            })?;
+            // Fill entire row with spaces to clear any previous image
+            handle
+                .write_all(&vec![b' '; area.width as usize])
+                .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
+        }
+
+        // Small delay to let terminal process the clear (prevents flicker)
+        std::thread::sleep(std::time::Duration::from_millis(5));
+
+        // Position cursor at the calculated center position for the new image
+        queue!(handle, MoveTo(start_x, start_y))
+            .map_err(|e| ImageError::RenderFailed(format!("Failed to position cursor: {}", e)))?;
 
         handle
             .write_all(osc.as_bytes())
@@ -437,38 +582,52 @@ impl ImageRenderer {
             .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
 
         tracing::debug!(
-            "Rendered image via iTerm2 protocol ({}x{} cells)",
-            display_cols,
-            display_rows
+            "Rendered image via iTerm2 protocol at ({}, {}) size {}x{} px (with {} cell margins)",
+            start_x,
+            start_y,
+            display_width_px,
+            display_height_px,
+            MARGIN
         );
 
         Ok(())
     }
 
     /// Render using Sixel via chafa
-    fn render_sixel(
-        &mut self,
-        image_data: &[u8],
-        area: Rect,
-    ) -> Result<Vec<Line<'static>>, ImageError> {
+    fn render_sixel(&mut self, image_data: &[u8], area: Rect) -> Result<(), ImageError> {
         // Check cache
         if let Some(ref cached) = self.sixel_cache {
-            return Ok(self.parse_sixel_to_lines(cached, area));
+            let stdout = io::stdout();
+            let mut handle = stdout.lock();
+            handle
+                .write_all(cached)
+                .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
+            handle
+                .flush()
+                .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
+            return Ok(());
         }
 
-        // Spawn chafa process
+        // Calculate size accounting for borders (2 cells on each side)
+        let render_width = area.width.saturating_sub(2);
+        let render_height = area.height.saturating_sub(2);
+
+        // Spawn chafa process with high-quality settings
+        // Using --symbols all for best quality (as used in v2.0.0)
         let mut child = Command::new("chafa")
             .args(&[
                 "-f",
                 "sixels",
                 "--size",
-                &format!("{}x{}", area.width, area.height * 2), // *2 for better resolution
+                &format!("{}x{}", render_width, render_height),
                 "--center",
                 "on",
                 "--colors",
                 "256",
+                "--symbols",
+                "all", // High quality symbol set
                 "--dither",
-                "ordered", // Better quality
+                "ordered",
                 "-",
             ])
             .stdin(Stdio::piped())
@@ -494,38 +653,36 @@ impl ImageRenderer {
             return Err(ImageError::RenderFailed(format!("chafa error: {}", stderr)));
         }
 
-        let sixel_output = String::from_utf8(output.stdout)
-            .map_err(|e| ImageError::RenderFailed(format!("Invalid UTF-8 from chafa: {}", e)))?;
-
         // Cache for reuse
-        self.sixel_cache = Some(sixel_output.clone());
+        self.sixel_cache = Some(output.stdout.clone());
 
-        Ok(self.parse_sixel_to_lines(&sixel_output, area))
-    }
+        // Write sixel output directly to stdout
+        // Position cursor first to ensure correct placement
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
 
-    /// Parse Sixel output to ratatui Lines
-    fn parse_sixel_to_lines(&self, sixel: &str, area: Rect) -> Vec<Line<'static>> {
-        let lines: Vec<&str> = sixel.lines().collect();
-        let max_lines = area.height as usize;
-        let max_width = area.width as usize;
+        // Move cursor to top-left of image area
+        queue!(handle, MoveTo(area.x, area.y))
+            .map_err(|e| ImageError::RenderFailed(format!("Failed to position cursor: {}", e)))?;
 
-        lines
-            .iter()
-            .take(max_lines)
-            .map(|line| {
-                let truncated = if line.len() > max_width {
-                    &line[..max_width]
-                } else {
-                    line
-                };
-                Line::from(Span::raw(truncated.to_string()))
-            })
-            .collect()
+        handle
+            .write_all(&output.stdout)
+            .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
+        handle
+            .flush()
+            .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
+
+        tracing::debug!(
+            "Rendered image via Sixel protocol at ({}, {})",
+            area.x,
+            area.y
+        );
+
+        Ok(())
     }
 
     /// Get image dimensions
     fn get_image_dimensions(&self, image_data: &[u8]) -> Result<(u32, u32), ImageError> {
-        // Use image crate to get dimensions
         match image::load_from_memory(image_data) {
             Ok(img) => Ok((img.width(), img.height())),
             Err(e) => Err(ImageError::InvalidImageData(format!(
@@ -545,19 +702,23 @@ impl ImageRenderer {
     ) -> (u32, u32) {
         let aspect_ratio = img_width as f32 / img_height as f32;
 
+        // Use 100% of available space - maximize image size
+        let available_cols = max_cols;
+        let available_rows = max_rows;
+
         // Try to fit in max dimensions
-        let mut cols = max_cols;
+        let mut cols = available_cols;
         let mut rows = (cols as f32 / aspect_ratio) as u32;
 
         // If too tall, scale down
-        if rows > max_rows {
-            rows = max_rows;
+        if rows > available_rows {
+            rows = available_rows;
             cols = (rows as f32 * aspect_ratio) as u32;
         }
 
-        // Ensure minimum size
-        cols = cols.max(10);
-        rows = rows.max(5);
+        // Ensure minimum size but allow larger images
+        cols = cols.max(10).min(available_cols);
+        rows = rows.max(5).min(available_rows);
 
         (cols, rows)
     }
@@ -565,6 +726,96 @@ impl ImageRenderer {
     /// Clear cache (call when switching images)
     pub fn clear_cache(&mut self) {
         self.sixel_cache = None;
+        self.last_kitty_image_id = None;
+        self.last_rendered_hash = None;
+        self.last_rendered_area = None;
+        self.last_image_data = None;
+        tracing::debug!("Image renderer cache cleared");
+    }
+
+    /// Clear graphics from terminal screen using protocol-specific escape sequences
+    /// This actually erases images from the terminal, not just from our cache
+    pub fn clear_terminal_graphics(&self) -> io::Result<()> {
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
+
+        match self.protocol {
+            Protocol::Kitty => {
+                // Kitty: Delete all images with id=1 (our fixed image ID)
+                // a=d: delete action
+                // d=i: delete by image id
+                // i=1: image id 1
+                let clear_cmd = "\x1b_Ga=d,d=i,i=1,q=2\x1b\\";
+                handle.write_all(clear_cmd.as_bytes())?;
+
+                // Also send clear all as backup
+                let clear_all = "\x1b_Ga=d,d=A,q=2\x1b\\";
+                handle.write_all(clear_all.as_bytes())?;
+
+                handle.flush()?;
+                tracing::debug!("Terminal graphics cleared for Kitty protocol");
+            }
+            Protocol::Iterm2 => {
+                // iTerm2/Warp: Clear by writing spaces over the last rendered area
+                // This is necessary because iTerm2 images persist via escape codes
+                if let Some(area) = self.last_rendered_area {
+                    for row in area.y..area.y + area.height {
+                        queue!(handle, MoveTo(area.x, row)).map_err(|e| {
+                            io::Error::new(
+                                io::ErrorKind::Other,
+                                format!("Failed to position cursor: {}", e),
+                            )
+                        })?;
+                        handle.write_all(&vec![b' '; area.width as usize])?;
+                    }
+                    handle.flush()?;
+                    tracing::debug!(
+                        "Terminal graphics cleared for iTerm2 protocol (area: {:?})",
+                        area
+                    );
+                } else {
+                    tracing::debug!("iTerm2 protocol: no last_rendered_area to clear");
+                }
+            }
+            Protocol::Sixel => {
+                // Sixel: Send DCS sequence to end sixel mode and clear
+                handle.write_all(b"\x1b\\")?; // String terminator
+                handle.flush()?;
+                tracing::debug!("Terminal graphics cleared for Sixel protocol");
+            }
+            Protocol::None => {
+                // No graphics to clear
+                tracing::debug!("No graphics protocol: nothing to clear");
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Check if the protocol requires terminal clearing (Kitty and iTerm2)
+    pub fn requires_terminal_clear(&self) -> bool {
+        matches!(self.protocol, Protocol::Kitty | Protocol::Iterm2)
+    }
+
+    /// Clear a specific rectangular area by writing spaces
+    /// This works for all protocols including iTerm2
+    pub fn clear_area(&self, area: Rect) -> io::Result<()> {
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
+
+        for row in area.y..area.y + area.height {
+            queue!(handle, MoveTo(area.x, row)).map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("Failed to position cursor: {}", e),
+                )
+            })?;
+            handle.write_all(&vec![b' '; area.width as usize])?;
+        }
+        handle.flush()?;
+
+        tracing::debug!("Cleared area: {:?}", area);
+        Ok(())
     }
 }
 
@@ -580,9 +831,7 @@ mod tests {
 
     #[test]
     fn test_protocol_detection() {
-        // This would need to set env vars, so we just test the struct creation
         let renderer = ImageRenderer::new();
-        // Should not panic
         let _ = renderer.protocol();
     }
 
@@ -591,5 +840,17 @@ mod tests {
         let err = ImageError::ChafaNotInstalled;
         let lines = err.to_lines();
         assert!(!lines.is_empty());
+    }
+
+    #[test]
+    fn test_calculate_display_size() {
+        let renderer = ImageRenderer::new();
+        // Test with 40x20 area (accounting for 3-cell margins on each side)
+        // Available space: 40 - 6 = 34 cols, 20 - 6 = 14 rows
+        let (cols, rows) = renderer.calculate_display_size(1920, 1080, 34, 14);
+        assert!(cols > 0);
+        assert!(rows > 0);
+        assert!(cols <= 34); // 40 - 6 for margins
+        assert!(rows <= 14); // 20 - 6 for margins
     }
 }
