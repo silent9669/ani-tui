@@ -579,20 +579,22 @@ impl ImageRenderer {
         let stdout = io::stdout();
         let mut handle = stdout.lock();
 
-        // CRITICAL FIX: Clear the image area with spaces to prevent stacking
-        // iTerm2 images don't auto-clear, so we must overwrite the area
+        // CRITICAL FIX: Clear the image area efficiently to prevent stacking
+        // Use a single buffer for all spaces to reduce syscalls
+        let spaces = vec![b' '; area.width as usize];
         for row in area.y..area.y + area.height {
             queue!(handle, MoveTo(area.x, row)).map_err(|e| {
                 ImageError::RenderFailed(format!("Failed to position cursor: {}", e))
             })?;
-            // Fill entire row with spaces to clear any previous image
             handle
-                .write_all(&vec![b' '; area.width as usize])
+                .write_all(&spaces)
                 .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
         }
 
-        // Small delay to let terminal process the clear (prevents flicker)
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        // Single flush after all clearing
+        handle
+            .flush()
+            .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
 
         // Position cursor at the calculated center position for the new image
         queue!(handle, MoveTo(start_x, start_y))
