@@ -22,8 +22,70 @@ Write-Status "ani-tui Complete Installer" "Cyan"
 Write-Status "========================================" "Cyan"
 Write-Status ""
 
-# Step 0: Check/Install Visual C++ Redistributable (CRITICAL)
-Write-Status "Step 0: Checking Visual C++ Redistributable..." "Yellow"
+# Step 0: Check Windows Terminal Version
+Write-Status "Step 0: Checking Windows Terminal version..." "Yellow"
+
+function Get-WindowsTerminalVersion {
+    try {
+        # Try to get version from Windows Terminal package
+        $wtPackage = Get-AppxPackage -Name "Microsoft.WindowsTerminal" -ErrorAction SilentlyContinue
+        if ($wtPackage) {
+            return $wtPackage.Version
+        }
+        
+        # Try to get from wt.exe
+        $wtPath = (Get-Command wt -ErrorAction SilentlyContinue).Source
+        if ($wtPath) {
+            $versionInfo = (Get-Item $wtPath).VersionInfo
+            return "$($versionInfo.FileMajorPart).$($versionInfo.FileMinorPart)"
+        }
+        
+        return $null
+    } catch {
+        return $null
+    }
+}
+
+$wtVersion = Get-WindowsTerminalVersion
+
+if ($wtVersion) {
+    Write-Status "Windows Terminal version: $wtVersion" "Gray"
+    
+    # Parse version (e.g., "1.18.3181.0" -> major=1, minor=18)
+    $versionParts = $wtVersion -split '\.'
+    $major = [int]$versionParts[0]
+    $minor = [int]$versionParts[1]
+    
+    # Check if version is >= 1.22
+    if ($major -lt 1 -or ($major -eq 1 -and $minor -lt 22)) {
+        Write-Status ""
+        Write-Status "❌ Windows Terminal $wtVersion is too old" "Red"
+        Write-Status ""
+        Write-Status "⚠️  Windows Terminal 1.22+ is required for image previews" "Yellow"
+        Write-Status ""
+        Write-Status "Please upgrade Windows Terminal first:" "Yellow"
+        Write-Status "  winget install --id Microsoft.WindowsTerminal -e" "Cyan"
+        Write-Status ""
+        Write-Status "After upgrading, please re-run this installer." "Yellow"
+        Write-Status ""
+        
+        $continue = Read-Host "Continue without image support? (y/N)"
+        if ($continue -ne 'y' -and $continue -ne 'Y') {
+            exit 1
+        }
+        Write-Status "⚠️  Continuing without image preview support" "Yellow"
+    } else {
+        Write-Status "✓ Windows Terminal $wtVersion is supported" "Green"
+    }
+} else {
+    Write-Status "⚠️  Could not detect Windows Terminal version" "Yellow"
+    Write-Status "   Images may not work properly" "Yellow"
+}
+
+Write-Status ""
+
+# Step 2: Check/Install Visual C++ Redistributable (CRITICAL)
+Write-Status "Step 2: Checking Visual C++ Redistributable..." "Yellow"
 Write-Status "This is REQUIRED for ani-tui to run on Windows!" "Red"
 
 $vcInstalled = $false
@@ -55,15 +117,15 @@ if (-not $vcInstalled) {
     }
 }
 
-# Step 1: Create installation directory
+# Step 2: Create installation directory
 Write-Status ""
-Write-Status "Step 1: Creating installation directory..." "Yellow"
+Write-Status "Step 2: Creating installation directory..." "Yellow"
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 Write-Status "✓ Directory created: $InstallDir" "Green"
 
-# Step 2: Install mpv using winget (most reliable)
+# Step 3: Install mpv using winget (most reliable)
 Write-Status ""
-Write-Status "Step 2: Installing mpv (REQUIRED for video playback)..." "Yellow"
+Write-Status "Step 3: Installing mpv (REQUIRED for video playback)..." "Yellow"
 
 if (Test-Command "mpv") {
     Write-Status "✓ mpv already installed" "Green"
@@ -103,9 +165,9 @@ if (Test-Command "mpv") {
     }
 }
 
-# Step 3: Install chafa (Optional)
+# Step 4: Install chafa (Optional)
 Write-Status ""
-Write-Status "Step 3: Installing chafa (for image previews)..." "Yellow"
+Write-Status "Step 4: Installing chafa (for image previews)..." "Yellow"
 
 if (Test-Command "chafa") {
     Write-Status "✓ chafa already installed" "Green"
@@ -131,9 +193,9 @@ if (Test-Command "chafa") {
     }
 }
 
-# Step 4: Install ani-tui
+# Step 5: Install ani-tui
 Write-Status ""
-Write-Status "Step 4: Installing ani-tui..." "Yellow"
+Write-Status "Step 5: Installing ani-tui..." "Yellow"
 
 $existingPath = Get-Command ani-tui -ErrorAction SilentlyContinue
 if ($existingPath) {
@@ -208,7 +270,7 @@ if (Test-Path $binaryPath) {
     Write-Status "✗ Binary not found!" "Red"
 }
 
-# Check dependencies
+# Step 8: Check dependencies
 Write-Status ""
 Write-Status "Step 8: Checking dependencies..." "Yellow"
 

@@ -97,6 +97,13 @@ pub struct App {
     // New image renderer with multi-protocol support
     image_renderer: ImageRenderer,
 
+    // Async image loading state
+    pending_image_load: Option<std::pin::Pin<Box<dyn std::future::Future<Output = Option<Vec<u8>>>>>>,
+    image_loading: bool,
+    
+    // Preloaded images for smooth switching
+    preloaded_images: std::collections::HashMap<String, Vec<u8>>, // anime_id -> image_data
+    
     // Track previous screen for navigation
     previous_screen: Option<Screen>,
 
@@ -229,6 +236,11 @@ impl App {
             last_keypress: Instant::now(),
             last_image_navigation: Instant::now(),
             last_preview_anime_id: None,
+            // Async image loading state
+            pending_image_load: None,
+            image_loading: false,
+            // Preloaded images cache
+            preloaded_images: std::collections::HashMap::new(),
         })
     }
 
@@ -473,17 +485,28 @@ impl App {
                     frame.render_widget(image_widget, chunks[0]);
                 }
             } else {
-                let image_text = if !history_cover_url.is_empty() {
-                    "[Loading image...]"
-                } else {
-                    "[No Image Available]"
-                };
+                // Show loading spinner when actively loading
                 let image_block = Block::default()
                     .borders(Borders::ALL)
-                    .title("Cover Image");
-                let image_widget = Paragraph::new(image_text)
-                    .alignment(Alignment::Center)
-                    .block(image_block);
+                    .title(if self.image_loading { "Loading Image..." } else { "Cover Image" });
+                
+                let image_widget = if self.image_loading {
+                    // Update spinner and render it
+                    self.loading_spinner.tick();
+                    let spinner_line = self.loading_spinner.render();
+                    Paragraph::new(Text::from(vec![Line::from(""), spinner_line, Line::from("")]))
+                        .alignment(Alignment::Center)
+                        .block(image_block)
+                } else {
+                    let image_text = if !history_cover_url.is_empty() {
+                        "[Loading image...]"
+                    } else {
+                        "[No Image Available]"
+                    };
+                    Paragraph::new(image_text)
+                        .alignment(Alignment::Center)
+                        .block(image_block)
+                };
                 frame.render_widget(image_widget, chunks[0]);
             }
 
@@ -1427,6 +1450,32 @@ impl App {
             // Check if this is a different anime than currently displayed
             let is_new_anime = self.current_anime_id.as_ref() != Some(&history.anime_id);
             
+            // Check preloaded cache first for instant display
+            if let Some(preloaded_data) = self.preloaded_images.get(&history.anime_id) {
+                tracing::debug!("Using preloaded image for: {}", history.title);
+                
+                // Store previous image for transition
+                if is_new_anime && self.current_image_data.is_some() {
+                    self.previous_image_data = self.current_image_data.clone();
+                    self.in_transition = true;
+                    self.transition_progress = 0.0;
+                }
+                
+                self.current_image_data = Some(preloaded_data.clone());
+                self.current_anime_id = Some(history.anime_id.clone());
+                self.last_image_render = Instant::now();
+                self.image_loading = false;
+                
+                // Preload next/prev images after displaying current
+                self.preload_adjacent_images().await;
+                return;
+            }
+            
+            // Set loading state before async load
+            if is_new_anime {
+                self.image_loading = true;
+            }
+            
             if !history.cover_url.is_empty() {
                 let image_id = format!("continue_watching_{}", history.anime_id);
                 let cover_url = history.cover_url.clone();
@@ -1442,22 +1491,87 @@ impl App {
                         }
                         
                         // Update current image
-                        self.current_image_data = Some(data);
+                        self.current_image_data = Some(data.clone());
                         self.current_anime_id = Some(history.anime_id.clone());
                         self.last_image_render = Instant::now();
+                        self.image_loading = false;
+                        
+                        // Cache for preloading
+                        self.preloaded_images.insert(history.anime_id.clone(), data);
+                        
                         tracing::debug!("Loaded continue watching image for: {}", history.title);
+                        
+                        // Preload next/prev images
+                        self.preload_adjacent_images().await;
                     }
                     Err(e) => {
                         tracing::warn!("Failed to load cover image for {}: {}", history.title, e);
                         // Show placeholder on error
                         self.current_image_data = None;
                         self.current_anime_id = Some(history.anime_id.clone());
+                        self.image_loading = false;
                     }
                 }
             } else {
                 self.current_image_data = None;
                 self.current_anime_id = Some(history.anime_id.clone());
             }
+        }
+    }
+
+    /// Preload next and previous anime images for smooth navigation
+    async fn preload_adjacent_images(&mut self) {
+        let current_idx = self.continue_watching_selected;
+        
+        // Preload next anime
+        if let Some(next_history) = self.continue_watching.get(current_idx + 1) {
+            if !next_history.cover_url.is_empty() 
+                && !self.preloaded_images.contains_key(&next_history.anime_id) {
+                let image_id = format!("continue_watching_{}", next_history.anime_id);
+                let cover_url = next_history.cover_url.clone();
+                let anime_id = next_history.anime_id.clone();
+                
+                // Spawn background task to preload
+                if let Ok(data) = self.image_pipeline.request_download(image_id, cover_url).await {
+                    self.preloaded_images.insert(anime_id, data);
+                    tracing::debug!("Preloaded next image for: {}", next_history.title);
+                }
+            }
+        }
+        
+        // Preload previous anime
+        if current_idx > 0 {
+            if let Some(prev_history) = self.continue_watching.get(current_idx - 1) {
+                if !prev_history.cover_url.is_empty()
+                    && !self.preloaded_images.contains_key(&prev_history.anime_id) {
+                    let image_id = format!("continue_watching_{}", prev_history.anime_id);
+                    let cover_url = prev_history.cover_url.clone();
+                    let anime_id = prev_history.anime_id.clone();
+                    
+                    if let Ok(data) = self.image_pipeline.request_download(image_id, cover_url).await {
+                        self.preloaded_images.insert(anime_id, data);
+                        tracing::debug!("Preloaded previous image for: {}", prev_history.title);
+                    }
+                }
+            }
+        }
+        
+        // Limit cache size to prevent memory bloat (keep last 10 images)
+        if self.preloaded_images.len() > 10 {
+            // Remove oldest entries (simple approach: clear all except current and adjacent)
+            let current_id = self.current_anime_id.clone();
+            let next_id = self.continue_watching.get(current_idx + 1).map(|h| h.anime_id.clone());
+            let prev_id = if current_idx > 0 {
+                self.continue_watching.get(current_idx - 1).map(|h| h.anime_id.clone())
+            } else {
+                None
+            };
+            
+            self.preloaded_images.retain(|id, _| {
+                Some(id.clone()) == current_id ||
+                Some(id.clone()) == next_id ||
+                Some(id.clone()) == prev_id
+            });
         }
     }
 
