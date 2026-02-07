@@ -52,7 +52,7 @@ impl std::fmt::Display for ImageError {
                 write!(f, "Images not supported in {}", term)
             }
             ImageError::ChafaNotInstalled => {
-                write!(f, "chafa not installed")
+                write!(f, "chafa not installed (scoop install chafa)")
             }
             ImageError::InvalidImageData(msg) => {
                 write!(f, "Invalid image data: {}", msg)
@@ -621,17 +621,30 @@ impl ImageRenderer {
 
     /// Render using Sixel via chafa
     fn render_sixel(&mut self, image_data: &[u8], area: Rect) -> Result<(), ImageError> {
-        // Check cache
+        // Check cache - but invalidate if area size changed
         if let Some(ref cached) = self.sixel_cache {
-            let stdout = io::stdout();
-            let mut handle = stdout.lock();
-            handle
-                .write_all(cached)
-                .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
-            handle
-                .flush()
-                .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
-            return Ok(());
+            // Check if cached sixel is for the same area size
+            if let Some(last_area) = self.last_rendered_area {
+                if last_area.width == area.width && last_area.height == area.height {
+                    let stdout = io::stdout();
+                    let mut handle = stdout.lock();
+
+                    // CRITICAL FIX: Position cursor BEFORE writing cached sixel data
+                    queue!(handle, MoveTo(area.x, area.y)).map_err(|e| {
+                        ImageError::RenderFailed(format!("Failed to position cursor: {}", e))
+                    })?;
+
+                    handle
+                        .write_all(cached)
+                        .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
+                    handle
+                        .flush()
+                        .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
+                    return Ok(());
+                }
+            }
+            // Area size changed, invalidate cache
+            self.sixel_cache = None;
         }
 
         // Calculate size accounting for borders (2 cells on each side)

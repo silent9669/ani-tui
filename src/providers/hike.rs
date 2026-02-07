@@ -242,6 +242,5 @@ mod tests {
         let provider = HikeProvider::new();
         let results = provider.search("jujutsu kaisen").await;
         assert!(results.is_ok());
-        println!("Found {} results", results.unwrap().len());
     }
 }
