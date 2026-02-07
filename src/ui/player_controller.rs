@@ -25,11 +25,21 @@ pub enum ControlAction {
     BackToMenu,
 }
 
-const CONTROLS: &[(ControlAction, &str, char)] = &[
-    (ControlAction::NextEpisode, "Next Episode", 'n'),
-    (ControlAction::PreviousEpisode, "Previous Episode", 'p'),
-    (ControlAction::ChooseEpisode, "Choose Episode", 'e'),
-    (ControlAction::BackToMenu, "Back to Menu", 'b'),
+const CONTROLS: &[(ControlAction, &str, &str, char)] = &[
+    (
+        ControlAction::PreviousEpisode,
+        "Previous Episode",
+        "[P]",
+        'p',
+    ),
+    (ControlAction::NextEpisode, "Next Episode", "[N]", 'n'),
+    (ControlAction::ChooseEpisode, "Choose Episode", "[E]", 'e'),
+    (
+        ControlAction::BackToMenu,
+        "Back to Dashboard",
+        "[ESC]",
+        '\x1b',
+    ),
 ];
 
 impl PlayerController {
@@ -56,9 +66,9 @@ impl PlayerController {
     ) {
         self.current_anime = Some((anime, episodes));
         self.current_episode_idx = start_episode;
-        self.state = PlayerState::Playing;
-        self.controls_since = None;
-        self.selected_control = 0;
+        self.state = PlayerState::ControlsVisible;
+        self.controls_since = Some(Instant::now());
+        self.selected_control = 1; // Default to Next Episode (index 1 in new order)
     }
 
     pub fn show_controls(&mut self) {

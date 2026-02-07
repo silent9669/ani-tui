@@ -83,15 +83,25 @@ pub struct App {
     loading_spinner: LoadingSpinner,
     toast: Option<Toast>,
 
-    // Image cache for current preview
+    // SINGLE image context - simplified architecture
     pub(crate) current_image_data: Option<Vec<u8>>,
+    current_anime_id: Option<String>,
     current_sixel_cache: Option<String>,
+    
+    // Image transition tracking for smooth fades
+    previous_image_data: Option<Vec<u8>>,
+    transition_progress: f32,  // 0.0 to 1.0
+    in_transition: bool,
+    last_image_render: Instant,
     
     // New image renderer with multi-protocol support
     image_renderer: ImageRenderer,
 
     // Track previous screen for navigation
     previous_screen: Option<Screen>,
+
+    // Track preloading status for splash screen
+    preloaded_image_ids: Vec<String>,
 
     // Trigger preview load when entering search
     needs_preview_load: bool,
@@ -112,6 +122,12 @@ pub struct App {
     search_pending: bool,
     #[allow(dead_code)]
     last_keypress: Instant,
+    
+    // Image navigation debounce (prevents rapid re-renders when holding arrow keys)
+    last_image_navigation: Instant,
+    
+    // Track last rendered anime ID in PreviewPanel to detect changes
+    last_preview_anime_id: Option<String>,
 }
 
 impl App {
@@ -130,6 +146,7 @@ impl App {
             .filter(|h| !h.cover_url.is_empty())
             .map(|h| (format!("continue_watching_{}", h.anime_id), h.cover_url.clone()))
             .collect();
+        let preloaded_image_ids: Vec<String> = images_to_preload.iter().map(|(id, _)| id.clone()).collect();
         let _ = image_pipeline.preload_images(images_to_preload);
 
         // Load first image immediately if available
@@ -185,10 +202,19 @@ impl App {
             continue_watching_selected: 0,
             loading_spinner: LoadingSpinner::new(),
             toast: None,
+            // Initialize single image context
             current_image_data,
+            current_anime_id: None,
             current_sixel_cache: None,
+            // Transition tracking
+            previous_image_data: None,
+            transition_progress: 0.0,
+            in_transition: false,
+            last_image_render: Instant::now(),
+            // Image renderer
             image_renderer,
             previous_screen: None,
+            preloaded_image_ids,
             needs_preview_load: false,
             show_episode_list: false,
             episode_list_scroll: 0,
@@ -201,6 +227,8 @@ impl App {
             continue_watching_metadata: std::collections::HashMap::new(),
             search_pending: false,
             last_keypress: Instant::now(),
+            last_image_navigation: Instant::now(),
+            last_preview_anime_id: None,
         })
     }
 
@@ -249,6 +277,19 @@ impl App {
                         // Handle Shift+S for search
                         if key.code == KeyCode::Char('S') {
                             if self.current_screen == Screen::Home {
+                                // Clear terminal graphics FIRST (before clearing cache)
+                                // This ensures we clear the area that was last rendered
+                                let _ = self.image_renderer.clear_terminal_graphics();
+                                
+                                // Clear all image state for clean search entry
+                                self.current_image_data = None;
+                                self.current_anime_id = None;
+                                self.previous_image_data = None;
+                                self.in_transition = false;
+                                self.image_renderer.clear_cache();
+                                // Reset preview anime tracking to ensure clean state
+                                self.last_preview_anime_id = None;
+                                // Switch to search screen
                                 self.current_screen = Screen::Search;
                                 self.needs_preview_load = true;
                                 continue;
@@ -404,12 +445,13 @@ impl App {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Percentage(60),
-                    Constraint::Percentage(40),
+                    Constraint::Percentage(60),  // Image section
+                    Constraint::Percentage(40),  // Description section
                 ])
-                .margin(1)
+                .margin(0)  // Remove margin for full-size images
                 .split(area);
 
+            // Use current image data (single context)
             let has_image = self.current_image_data.as_ref().map(|d| !d.is_empty()).unwrap_or(false);
 
             if has_image {
@@ -580,31 +622,42 @@ impl App {
             None => true,
         };
 
+        // Render border first to establish the frame
+        let border_only = Block::default()
+            .borders(Borders::ALL)
+            .title("Cover Image");
+        
+        // Calculate inner area (inside borders) for image
+        let inner_area = border_only.inner(area);
+        
+        // Render border
+        frame.render_widget(border_only, area);
+        
         if needs_update {
+            // Clear terminal graphics if using Kitty protocol
+            if self.image_renderer.requires_terminal_clear() {
+                if let Err(e) = self.image_renderer.clear_terminal_graphics() {
+                    tracing::warn!("Failed to clear terminal graphics: {}", e);
+                }
+            }
             // Clear cache when switching to a new image
             self.image_renderer.clear_cache();
             self.current_image_data = Some(image_data.to_vec());
         }
-
-        // Render using the new multi-protocol image renderer
-        match self.image_renderer.render(image_data, area) {
-            Ok(None) => {
-                // Image rendered via escape codes (Kitty, iTerm2)
-                // Nothing to do - image is displayed by terminal
-            }
-            Ok(Some(lines)) => {
-                // Sixel protocol - render the lines
-                let widget = Paragraph::new(ratatui::text::Text::from(lines))
-                    .block(Block::default().borders(Borders::ALL).title("Cover Image"));
-                frame.render_widget(widget, area);
+        
+        // Always render image (iTerm2 is stateless and needs redraw each frame)
+        match self.image_renderer.render(image_data, inner_area) {
+            Ok(_) => {
+                // Image rendered successfully via escape codes (Kitty, iTerm2, or Sixel)
+                tracing::debug!("Image rendered in inner area {:?}", inner_area);
             }
             Err(e) => {
-                // Show error details
+                // Show error details inside the bordered area
                 tracing::warn!("Image render error: {}", e);
                 let error_lines = e.to_lines();
                 let error_widget = Paragraph::new(ratatui::text::Text::from(error_lines))
-                    .block(Block::default().borders(Borders::ALL).title("⚠️ Image Error"));
-                frame.render_widget(error_widget, area);
+                    .block(Block::default().borders(Borders::NONE));
+                frame.render_widget(error_widget, inner_area);
             }
         }
     }
@@ -853,16 +906,8 @@ impl App {
     fn draw_player_with_controls(&mut self, frame: &mut Frame) {
         let area = frame.size();
 
-        // Show control overlay if visible
-        if self.player_controller.state() == PlayerState::ControlsVisible {
-            self.draw_control_overlay(frame, area);
-        } else {
-            // Show minimal indicator that player is active
-            let paragraph = Paragraph::new("Video playing... Press any key for controls")
-                .alignment(Alignment::Center)
-                .block(Block::default().borders(Borders::ALL).title("Player"));
-            frame.render_widget(paragraph, area);
-        }
+        // Always show control overlay (no intermediate "Video playing..." screen)
+        self.draw_control_overlay(frame, area);
 
         // Episode list modal
         if self.show_episode_list {
@@ -871,11 +916,13 @@ impl App {
     }
 
     fn draw_control_overlay(&self, frame: &mut Frame, area: Rect) {
+        // Control items: Previous, Next, Choose, Back
+        // Order: 0=Previous, 1=Next, 2=Choose, 3=Back
         let controls = vec![
-            ("Next Episode", self.player_controller.has_next_episode()),
-            ("Previous Episode", self.player_controller.has_previous_episode()),
-            ("Choose Episode", true),
-            ("Back to Menu", true),
+            ("Previous Episode", "[P]", self.player_controller.has_previous_episode()),
+            ("Next Episode", "[N]", self.player_controller.has_next_episode()),
+            ("Choose Episode", "[E]", true),
+            ("Back to Dashboard", "[ESC]", true),
         ];
 
         let title = format!("{} - Episode {}/{}",
@@ -884,22 +931,8 @@ impl App {
             self.player_controller.total_episodes()
         );
 
-        let title_lines: Vec<Line> = vec![
-            Line::from(""),
-            Line::from(vec![
-                Span::styled(
-                    title.clone(),
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-                ),
-            ]),
-            Line::from(""),
-        ];
-
-        let control_height = controls.len() + 4; // title + controls + padding
         let available_height = area.height as usize;
-        let vertical_padding = (available_height.saturating_sub(control_height)) / 2;
+        let vertical_padding = (available_height.saturating_sub(10)) / 2;
         
         let mut all_lines: Vec<Line> = Vec::new();
         
@@ -908,41 +941,79 @@ impl App {
             all_lines.push(Line::from(""));
         }
         
-        // Add title
-        all_lines.extend(title_lines);
+        // Add title - larger and bold
+        all_lines.push(Line::from(""));
+        all_lines.push(Line::from(vec![
+            Span::styled(
+                title.clone(),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+            ),
+        ]));
+        all_lines.push(Line::from(""));
+        all_lines.push(Line::from(""));
         
-        // Add controls with bigger text
-        for (idx, (label, enabled)) in controls.iter().enumerate() {
-            let is_selected = idx == self.player_controller.selected_control();
+        // Build horizontal controls line with centered Next button
+        let selected_idx = self.player_controller.selected_control();
+        let mut control_spans: Vec<Span> = Vec::new();
+        
+        for (idx, (label, keybind, enabled)) in controls.iter().enumerate() {
+            let is_selected = idx == selected_idx;
             
-            let style = if !enabled {
+            let label_style = if !enabled {
                 Style::default().fg(Color::DarkGray)
             } else if is_selected {
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD | Modifier::REVERSED)
             } else {
-                Style::default().add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD)
             };
-
-            let prefix = if is_selected { " ▶ " } else { "   " };
-
-            all_lines.push(Line::from(vec![
-                Span::styled(format!("{}{}", prefix, label), style),
-            ]));
+            
+            let keybind_style = Style::default().fg(Color::Gray);
+            
+            // Add spacing between controls
+            if idx > 0 {
+                control_spans.push(Span::raw("        ")); // 8 spaces between items
+            }
+            
+            // Add selection arrow if selected
+            if is_selected {
+                control_spans.push(Span::styled("▶ ", label_style));
+            } else {
+                control_spans.push(Span::raw("  "));
+            }
+            
+            // Add keybind
+            control_spans.push(Span::styled(keybind.to_string(), keybind_style));
+            control_spans.push(Span::raw(" "));
+            
+            // Add label
+            control_spans.push(Span::styled(label.to_string(), label_style));
         }
         
-        // Add bottom padding
-        while all_lines.len() < available_height.saturating_sub(2) {
+        all_lines.push(Line::from(control_spans));
+        all_lines.push(Line::from(""));
+        all_lines.push(Line::from(""));
+        
+        // Add bottom caption with navigation help
+        all_lines.push(Line::from(vec![
+            Span::styled(
+                "← → or ↑ ↓ : Navigate    Enter : Select",
+                Style::default().fg(Color::Gray),
+            ),
+        ]));
+        
+        // Add remaining padding
+        while all_lines.len() < available_height.saturating_sub(1) {
             all_lines.push(Line::from(""));
         }
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title("Controls (auto-hide in 5s)");
-
+        // No border block - clean minimal design
         let paragraph = Paragraph::new(Text::from(all_lines))
-            .block(block)
             .alignment(Alignment::Center);
 
         frame.render_widget(paragraph, area);
@@ -1341,23 +1412,46 @@ impl App {
     }
 
     async fn load_continue_watching_image(&mut self) {
+        // Debounce: skip if we updated recently (100ms for better responsiveness)
+        if self.last_image_navigation.elapsed().as_millis() < 100 {
+            return;
+        }
+        self.last_image_navigation = Instant::now();
+        
         if let Some(history) = self.continue_watching.get(self.continue_watching_selected) {
+            // Check if this is a different anime than currently displayed
+            let is_new_anime = self.current_anime_id.as_ref() != Some(&history.anime_id);
+            
             if !history.cover_url.is_empty() {
                 let image_id = format!("continue_watching_{}", history.anime_id);
                 let cover_url = history.cover_url.clone();
 
-                // Try to get image from cache or download it
+                // Load image - request_download checks memory -> disk -> network
                 match self.image_pipeline.request_download(image_id, cover_url).await {
                     Ok(data) => {
+                        // Store previous image for transition
+                        if is_new_anime && self.current_image_data.is_some() {
+                            self.previous_image_data = self.current_image_data.clone();
+                            self.in_transition = true;
+                            self.transition_progress = 0.0;
+                        }
+                        
+                        // Update current image
                         self.current_image_data = Some(data);
+                        self.current_anime_id = Some(history.anime_id.clone());
+                        self.last_image_render = Instant::now();
+                        tracing::debug!("Loaded continue watching image for: {}", history.title);
                     }
                     Err(e) => {
-                        tracing::warn!("Failed to load cover image: {}", e);
+                        tracing::warn!("Failed to load cover image for {}: {}", history.title, e);
+                        // Show placeholder on error
                         self.current_image_data = None;
+                        self.current_anime_id = Some(history.anime_id.clone());
                     }
                 }
             } else {
                 self.current_image_data = None;
+                self.current_anime_id = Some(history.anime_id.clone());
             }
         }
     }
@@ -1398,20 +1492,44 @@ impl App {
     ) -> Result<()> {
         match key {
             KeyCode::Esc | KeyCode::Char('B') => {
+                // Clear terminal graphics if using Kitty protocol
+                if self.image_renderer.requires_terminal_clear() {
+                    let _ = self.image_renderer.clear_terminal_graphics();
+                }
                 self.current_screen = Screen::Home;
                 self.search_overlay.query.clear();
                 self.enriched_results.clear();
                 self.search_pending = false;
+                // Clear terminal graphics for all protocols
+                let _ = self.image_renderer.clear_terminal_graphics();
+                // Clear all image state
+                self.current_image_data = None;
+                self.current_anime_id = None;
+                self.previous_image_data = None;
+                self.in_transition = false;
+                self.image_renderer.clear_cache();
+                self.last_preview_anime_id = None;
                 self.last_keypress = Instant::now();
             }
             KeyCode::Backspace => {
                 self.search_overlay.query.pop();
                 self.search_pending = true;
                 self.last_keypress = Instant::now();
-                // Clear results if empty
+                // Clear results and image if empty
                 if self.search_overlay.query.is_empty() {
                     self.enriched_results.clear();
                     self.search_pending = false;
+                    // Clear image when search query is empty
+                    if self.image_renderer.requires_terminal_clear() {
+                        let _ = self.image_renderer.clear_terminal_graphics();
+                    }
+                    // Clear all image state
+                    self.current_image_data = None;
+                    self.current_anime_id = None;
+                    self.previous_image_data = None;
+                    self.in_transition = false;
+                    self.image_renderer.clear_cache();
+                    self.last_preview_anime_id = None;
                 }
             }
             KeyCode::Char(c) => {
@@ -1486,18 +1604,23 @@ impl App {
     ) -> Result<()> {
         match self.player_controller.state() {
             PlayerState::Playing => {
-                // Any key shows controls
+                // Any key shows controls (should rarely happen now since we start with ControlsVisible)
                 self.player_controller.show_controls();
             }
             PlayerState::ControlsVisible => {
                 match key {
                     KeyCode::Esc => {
-                        self.player_controller.hide_controls();
+                        // ESC goes back to Dashboard
+                        self.save_watch_history().await;
+                        self.current_screen = Screen::Home;
+                        self.player_controller = PlayerController::new();
                     }
-                    KeyCode::Up => {
+                    KeyCode::Up | KeyCode::Left => {
+                        // Up or Left goes to previous control
                         self.player_controller.previous_control();
                     }
-                    KeyCode::Down => {
+                    KeyCode::Down | KeyCode::Right => {
+                        // Down or Right goes to next control
                         self.player_controller.next_control();
                     }
                     KeyCode::Enter => {
@@ -1517,17 +1640,13 @@ impl App {
                         self.show_episode_list = true;
                         self.episode_list_scroll = self.player_controller.current_episode_idx();
                     }
-                    KeyCode::Char('b') => {
-                        self.save_watch_history().await;
-                        self.current_screen = Screen::Home;
-                        self.player_controller = PlayerController::new();
-                    }
                     _ => {}
                 }
             }
             PlayerState::Ended => {
                 match key {
-                    KeyCode::Esc | KeyCode::Char('b') => {
+                    KeyCode::Esc => {
+                        // ESC goes back to Dashboard
                         self.save_watch_history().await;
                         self.current_screen = Screen::Home;
                         self.player_controller = PlayerController::new();
@@ -1655,22 +1774,45 @@ impl App {
     }
 
     async fn load_preview(&mut self) {
+        // Debounce: skip if we updated recently (100ms for better responsiveness)
+        if self.last_image_navigation.elapsed().as_millis() < 100 {
+            return;
+        }
+        self.last_image_navigation = Instant::now();
+        
         if let Some(anime) = self.enriched_results.get_mut(self.selected_index) {
-            // Load image
+            // Check if this is a different anime than currently displayed
+            let is_new_anime = self.current_anime_id.as_ref() != Some(&anime.base.id);
+            
+            // Load image - use request_download which checks memory -> disk -> network
             let id = anime.base.id.clone();
             let url = anime.base.cover_url.clone();
             
-            // Try to get image from cache or download
-            if let Some(image) = self.image_pipeline.get_image(&id).await {
-                self.current_image_data = Some(image.data);
-            } else if !url.is_empty() {
-                // Request download (don't block UI if it fails)
-                let image_result = self.image_pipeline.request_download(id.clone(), url.clone()).await;
-                if let Ok(data) = image_result {
-                    self.current_image_data = Some(data);
-                } else {
-                    self.current_image_data = None;
+            if !url.is_empty() {
+                match self.image_pipeline.request_download(id, url).await {
+                    Ok(data) => {
+                        // Store previous image for transition
+                        if is_new_anime && self.current_image_data.is_some() {
+                            self.previous_image_data = self.current_image_data.clone();
+                            self.in_transition = true;
+                            self.transition_progress = 0.0;
+                        }
+                        
+                        // Update current image
+                        self.current_image_data = Some(data);
+                        self.current_anime_id = Some(anime.base.id.clone());
+                        self.last_image_render = Instant::now();
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to load preview image: {}", e);
+                        // Show placeholder on error
+                        self.current_image_data = None;
+                        self.current_anime_id = Some(anime.base.id.clone());
+                    }
                 }
+            } else {
+                self.current_image_data = None;
+                self.current_anime_id = Some(anime.base.id.clone());
             }
             
             // Fetch metadata if not already loaded
@@ -1769,21 +1911,52 @@ impl App {
 
     async fn play_current_episode(&mut self,
     ) {
-        if let Some(episode) = self.player_controller.current_episode() {
-            let anime = self.player_controller.current_anime()
-                .cloned()
-                .unwrap_or_else(|| {
-                    self.selected_anime.as_ref().unwrap().base.clone()
-                });
+        // Get episode and anime data first, then clone to avoid borrow issues
+        let episode = if let Some(ep) = self.player_controller.current_episode() {
+            ep.clone()
+        } else {
+            return;
+        };
 
-            let provider_name = anime.provider.clone();
-            let episode_id = format!("{}:{}", anime.id, episode.number);
-            
-            tracing::info!("Playing episode {} for anime {} (provider: {})", 
-                episode.number, anime.title, provider_name);
-            tracing::debug!("Episode ID format: {}", episode_id);
+        let anime = if let Some(a) = self.player_controller.current_anime() {
+            a.clone()
+        } else if let Some(sa) = self.selected_anime.as_ref() {
+            sa.base.clone()
+        } else {
+            return;
+        };
 
-            self.show_toast(format!("Loading: {} Ep {}...", anime.title, episode.number), 5);
+        let provider_name = anime.provider.clone();
+        let episode_id = format!("{}:{}", anime.id, episode.number);
+        
+        tracing::info!("Playing episode {} for anime {} (provider: {})", 
+            episode.number, anime.title, provider_name);
+        tracing::debug!("Episode ID format: {}", episode_id);
+
+        self.show_toast(format!("Loading: {} Ep {}...", anime.title, episode.number), 5);
+
+        // Save watch history in background (non-blocking)
+        // This updates Continue Watching without delaying video playback
+        let db = self.db.clone();
+        let anime_clone = anime.clone();
+        let episode_clone = episode.clone();
+        tokio::spawn(async move {
+            use chrono::Utc;
+            let anime_id = format!("{}:{}", anime_clone.provider, anime_clone.id);
+            let history = crate::db::WatchHistory {
+                anime_id,
+                provider: anime_clone.provider.clone(),
+                title: anime_clone.title.clone(),
+                cover_url: anime_clone.cover_url.clone(),
+                episode_number: episode_clone.number,
+                episode_title: episode_clone.title.clone(),
+                position_seconds: 0,
+                total_seconds: 0,
+                updated_at: Utc::now(),
+            };
+            let _ = db.save_watch_history(&history).await;
+            tracing::info!("Saved watch history for {} ep {}", anime_clone.title, episode_clone.number);
+        });
 
             // Spawn playback in background
             tokio::spawn(async move {
@@ -1810,7 +1983,6 @@ impl App {
                     }
                 }
             });
-        }
     }
 
     fn show_toast(
@@ -1827,12 +1999,32 @@ impl App {
         // Update splash screen
         if self.current_screen == Screen::Splash {
             self.splash_screen.tick();
-            // Note: Metadata loading moved to background task after splash screen
-            if self.splash_screen.is_complete(self.splash_start.elapsed().as_millis() as u64) {
-                self.current_screen = Screen::SourceSelect;
-                // Start metadata loading in background after splash
-                if !self.continue_watching.is_empty() && self.continue_watching_metadata.is_empty() {
-                    self.load_metadata_in_background().await;
+            let elapsed = self.splash_start.elapsed().as_millis() as u64;
+            let min_splash_time = 800; // Minimum 0.8 seconds - faster loading
+            let max_splash_time = 5000; // Maximum 5 seconds timeout
+            
+            // Check if minimum time has passed
+            if elapsed >= min_splash_time {
+                // Check if first image is loaded (if we have continue watching items)
+                let first_image_ready = if !self.continue_watching.is_empty() {
+                    if let Some(first) = self.continue_watching.first() {
+                        let first_id = format!("continue_watching_{}", first.anime_id);
+                        // Try to get from pipeline cache
+                        self.image_pipeline.get_image(&first_id).await.is_some()
+                    } else {
+                        true
+                    }
+                } else {
+                    true
+                };
+                
+                // Transition if: minimum time passed AND (first image ready OR timeout reached)
+                if first_image_ready || elapsed >= max_splash_time {
+                    self.current_screen = Screen::SourceSelect;
+                    // Start metadata loading in background after splash
+                    if !self.continue_watching.is_empty() && self.continue_watching_metadata.is_empty() {
+                        self.load_metadata_in_background().await;
+                    }
                 }
             }
             return Ok(());
@@ -1892,6 +2084,23 @@ impl App {
         }
 
         Ok(())
+    }
+
+    // Getter methods for fields needed by other modules
+    pub(crate) fn image_renderer(&self) -> &ImageRenderer {
+        &self.image_renderer
+    }
+
+    pub(crate) fn image_renderer_mut(&mut self) -> &mut ImageRenderer {
+        &mut self.image_renderer
+    }
+
+    pub(crate) fn last_preview_anime_id(&self) -> &Option<String> {
+        &self.last_preview_anime_id
+    }
+
+    pub(crate) fn set_last_preview_anime_id(&mut self, id: Option<String>) {
+        self.last_preview_anime_id = id;
     }
 }
 

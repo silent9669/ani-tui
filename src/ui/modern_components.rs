@@ -25,9 +25,9 @@ impl SplashScreen {
     pub fn tick(&mut self) {
         self.frame_count += 1;
         self.loading_spinner.tick();
-        // Simulate loading progress - faster (5% per tick)
+        // Simulate loading progress - much faster (13% per tick for 800ms total)
         if self.loading_progress < 100 {
-            self.loading_progress = (self.loading_progress + 5).min(100);
+            self.loading_progress = (self.loading_progress + 13).min(100);
         }
     }
 
@@ -66,7 +66,7 @@ impl SplashScreen {
             .fg(accent_color)
             .add_modifier(Modifier::DIM);
 
-        let version_text = Paragraph::new("v3.0.0")
+        let version_text = Paragraph::new("v3.6.0")
             .alignment(Alignment::Center)
             .style(version_style);
         frame.render_widget(version_text, chunks[2]);
@@ -91,7 +91,7 @@ impl SplashScreen {
     }
 
     pub fn is_complete(&self, elapsed_ms: u64) -> bool {
-        elapsed_ms > 2000 // Show for 2 seconds
+        elapsed_ms > 800 // Show for 0.8 seconds - faster loading
     }
 }
 
@@ -109,14 +109,25 @@ impl PreviewPanel {
         if let Some(anime) = anime {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
-                .margin(1)
+                .constraints([Constraint::Percentage(60), Constraint::Percentage(40)]) // Balanced layout
+                .margin(0) // No margin for full-size images
                 .split(area);
 
+            // Check if we switched to a different anime
+            let current_anime_id = Some(anime.base.id.clone());
+            if current_anime_id != *app.last_preview_anime_id() {
+                // Anime changed - clear terminal graphics to prevent layering
+                if app.image_renderer().requires_terminal_clear() {
+                    let _ = app.image_renderer_mut().clear_terminal_graphics();
+                }
+                app.set_last_preview_anime_id(current_anime_id);
+            }
+
+            // Use current image data (single context)
             let has_image = app
                 .current_image_data
                 .as_ref()
-                .map(|d| !d.is_empty())
+                .map(|d: &Vec<u8>| !d.is_empty())
                 .unwrap_or(false);
 
             if has_image {
