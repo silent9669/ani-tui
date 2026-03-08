@@ -88,13 +88,19 @@ struct Server {
     server_name: String,
 }
 
+impl Default for HikeProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HikeProvider {
     pub fn new() -> Self {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
             .build()
             .expect("Failed to create HTTP client");
-        
+
         Self { client }
     }
 }
@@ -111,7 +117,7 @@ impl AnimeProvider for HikeProvider {
 
     async fn search(&self, query: &str) -> Result<Vec<Anime>> {
         let url = format!("{}/hianime/search", HIKE_API);
-        
+
         let response: SearchResponse = self
             .client
             .get(&url)
@@ -122,8 +128,10 @@ impl AnimeProvider for HikeProvider {
             .json()
             .await
             .context("Failed to parse search response")?;
-        
-        let results: Vec<Anime> = response.data.animes
+
+        let results: Vec<Anime> = response
+            .data
+            .animes
             .into_iter()
             .map(|anime| Anime {
                 id: anime.id.clone(),
@@ -135,13 +143,13 @@ impl AnimeProvider for HikeProvider {
                 synopsis: None,
             })
             .collect();
-        
+
         Ok(results)
     }
 
     async fn get_episodes(&self, anime_id: &str) -> Result<Vec<Episode>> {
         let url = format!("{}/hianime/anime/{}?episodes=true", HIKE_API, anime_id);
-        
+
         let response: AnimeInfoResponse = self
             .client
             .get(&url)
@@ -151,23 +159,33 @@ impl AnimeProvider for HikeProvider {
             .json()
             .await
             .context("Failed to parse anime info")?;
-        
-        let episodes: Vec<Episode> = response.data.anime.episodes
+
+        let episodes: Vec<Episode> = response
+            .data
+            .anime
+            .episodes
             .into_iter()
             .map(|ep| Episode {
                 number: ep.number,
-                title: if ep.title.is_empty() { None } else { Some(ep.title) },
+                title: if ep.title.is_empty() {
+                    None
+                } else {
+                    Some(ep.title)
+                },
                 thumbnail: None,
             })
             .collect();
-        
+
         Ok(episodes)
     }
 
     async fn get_stream_url(&self, episode_id: &str) -> Result<StreamInfo> {
         // First get available servers
-        let servers_url = format!("{}/hianime/episode/servers?animeEpisodeId={}", HIKE_API, episode_id);
-        
+        let servers_url = format!(
+            "{}/hianime/episode/servers?animeEpisodeId={}",
+            HIKE_API, episode_id
+        );
+
         let servers_response: EpisodeSourceResponse = self
             .client
             .get(&servers_url)
@@ -177,14 +195,14 @@ impl AnimeProvider for HikeProvider {
             .json()
             .await
             .context("Failed to parse servers response")?;
-        
+
         // Try to get source from first available server
         if let Some(server) = servers_response.data.episode.servers.first() {
             let source_url = format!(
                 "{}/hianime/episode/sources?animeEpisodeId={}&server={}&category=raw",
                 HIKE_API, episode_id, server.server_name
             );
-            
+
             let source_response = self
                 .client
                 .get(&source_url)
@@ -194,7 +212,7 @@ impl AnimeProvider for HikeProvider {
                 .json::<serde_json::Value>()
                 .await
                 .context("Failed to parse sources response")?;
-            
+
             // Extract video URL from response
             if let Some(tracks) = source_response["data"]["tracks"].as_array() {
                 for track in tracks {
@@ -202,7 +220,7 @@ impl AnimeProvider for HikeProvider {
                         if file.contains(".m3u8") || file.contains(".mp4") {
                             let mut headers = std::collections::HashMap::new();
                             headers.insert("Referer".to_string(), "https://hianime.to".to_string());
-                            
+
                             return Ok(StreamInfo {
                                 video_url: file.to_string(),
                                 subtitles: vec![],
@@ -213,12 +231,12 @@ impl AnimeProvider for HikeProvider {
                     }
                 }
             }
-            
+
             // Try intro/ending sources
             if let Some(intro) = source_response["data"]["intro"]["file"].as_str() {
                 let mut headers = std::collections::HashMap::new();
                 headers.insert("Referer".to_string(), "https://hianime.to".to_string());
-                
+
                 return Ok(StreamInfo {
                     video_url: intro.to_string(),
                     subtitles: vec![],
@@ -227,7 +245,7 @@ impl AnimeProvider for HikeProvider {
                 });
             }
         }
-        
+
         anyhow::bail!("No stream URL found for this episode")
     }
 }

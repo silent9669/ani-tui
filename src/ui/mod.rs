@@ -8,6 +8,6 @@ pub mod player_controller;
 pub mod screens;
 
 pub use app::App;
-pub use image_display::{ImageProtocol, supports_images, encode_image_for_display, clear_image};
+pub use image_display::{clear_image, encode_image_for_display, supports_images, ImageProtocol};
 pub use image_renderer::{ImageRenderer, Protocol as ImageProtocol2};
-pub use player_controller::{PlayerController, PlayerState, ControlAction, EndScreenAction};
+pub use player_controller::{ControlAction, EndScreenAction, PlayerController, PlayerState};

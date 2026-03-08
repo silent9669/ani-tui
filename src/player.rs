@@ -56,7 +56,7 @@ impl Player {
         let _ = cmd
             .spawn()
             .with_context(|| "Failed to start mpv. Is mpv installed?")?;
-        
+
         Ok(())
     }
 }

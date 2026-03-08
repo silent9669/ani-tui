@@ -82,39 +82,26 @@ impl ProviderRegistry {
         Self { providers }
     }
 
-    pub async fn search_all(&self,
-        query: &str,
-    ) -> Result<Vec<Anime>> {
+    pub async fn search_all(&self, query: &str) -> Result<Vec<Anime>> {
         let mut all_results = Vec::new();
 
         for provider in &self.providers {
-            match provider.search(query).await {
-                Ok(mut results) => {
-                    all_results.append(&mut results);
-                }
-                Err(_) => {
-                }
+            if let Ok(mut results) = provider.search(query).await {
+                all_results.append(&mut results);
             }
         }
 
         Ok(all_results)
     }
 
-    pub async fn search_filtered(&self,
-        query: &str,
-        languages: &[Language],
-    ) -> Result<Vec<Anime>> {
+    pub async fn search_filtered(&self, query: &str, languages: &[Language]) -> Result<Vec<Anime>> {
         let mut all_results = Vec::new();
 
         for provider in &self.providers {
             // Only search providers that match the selected languages
             if languages.contains(&provider.language()) {
-                match provider.search(query).await {
-                    Ok(mut results) => {
-                        all_results.append(&mut results);
-                    }
-                    Err(_) => {
-                    }
+                if let Ok(mut results) = provider.search(query).await {
+                    all_results.append(&mut results);
                 }
             }
         }
@@ -122,10 +109,7 @@ impl ProviderRegistry {
         Ok(all_results)
     }
 
-    pub fn get_provider(
-        &self,
-        name: &str,
-    ) -> Option<&Arc<dyn AnimeProvider>> {
+    pub fn get_provider(&self, name: &str) -> Option<&Arc<dyn AnimeProvider>> {
         self.providers.iter().find(|p| p.name() == name)
     }
 

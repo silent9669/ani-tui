@@ -35,13 +35,11 @@ impl AniListClient {
             .timeout(std::time::Duration::from_secs(10))
             .build()
             .expect("Failed to create HTTP client");
-        
+
         Self { client }
     }
 
-    pub async fn search_anime(&self,
-        query: &str,
-    ) -> Result<Vec<AniListMetadata>> {
+    pub async fn search_anime(&self, query: &str) -> Result<Vec<AniListMetadata>> {
         let search_query = r#"
             query ($search: String) {
                 Page(page: 1, perPage: 10) {
@@ -92,24 +90,24 @@ impl AniListClient {
         if let Some(media_list) = json["data"]["Page"]["media"].as_array() {
             for media in media_list {
                 let anilist_id = media["id"].as_i64().unwrap_or_default();
-                
+
                 let title = media["title"]["english"]
                     .as_str()
                     .or_else(|| media["title"]["romaji"].as_str())
                     .unwrap_or("Unknown")
                     .to_string();
-                
+
                 let description = media["description"]
                     .as_str()
                     .map(|s| s.replace("<br>", "\n").replace("<br/>", "\n"));
-                
+
                 let rating = media["averageScore"].as_i64();
-                
+
                 let cover_url = media["coverImage"]["large"]
                     .as_str()
                     .or_else(|| media["coverImage"]["medium"].as_str())
                     .map(|s| s.to_string());
-                
+
                 let genres: Vec<String> = media["genres"]
                     .as_array()
                     .map(|g| {
@@ -118,7 +116,7 @@ impl AniListClient {
                             .collect()
                     })
                     .unwrap_or_default();
-                
+
                 let episode_count = media["episodes"].as_i64();
 
                 results.push(AniListMetadata {
@@ -137,9 +135,7 @@ impl AniListClient {
         Ok(results)
     }
 
-    pub async fn get_by_id(&self,
-        anilist_id: i64,
-    ) -> Result<Option<AniListMetadata>> {
+    pub async fn get_by_id(&self, anilist_id: i64) -> Result<Option<AniListMetadata>> {
         let query = r#"
             query ($id: Int) {
                 Media(id: $id, type: ANIME) {
@@ -186,24 +182,24 @@ impl AniListClient {
 
         if let Some(media) = json["data"]["Media"].as_object() {
             let anilist_id = media["id"].as_i64().unwrap_or_default();
-            
+
             let title = media["title"]["english"]
                 .as_str()
                 .or_else(|| media["title"]["romaji"].as_str())
                 .unwrap_or("Unknown")
                 .to_string();
-            
+
             let description = media["description"]
                 .as_str()
                 .map(|s| s.replace("<br>", "\n").replace("<br/>", "\n"));
-            
+
             let rating = media["averageScore"].as_i64();
-            
+
             let cover_url = media["coverImage"]["large"]
                 .as_str()
                 .or_else(|| media["coverImage"]["medium"].as_str())
                 .map(|s| s.to_string());
-            
+
             let genres: Vec<String> = media["genres"]
                 .as_array()
                 .map(|g| {
@@ -212,7 +208,7 @@ impl AniListClient {
                         .collect()
                 })
                 .unwrap_or_default();
-            
+
             let episode_count = media["episodes"].as_i64();
 
             Ok(Some(AniListMetadata {
@@ -245,14 +241,15 @@ impl MetadataCache {
         }
     }
 
-    pub async fn get_metadata(
-        &self,
-        anilist_id: i64,
-    ) -> Result<Option<AniListMetadata>> {
+    pub async fn get_metadata(&self, anilist_id: i64) -> Result<Option<AniListMetadata>> {
         // Try cache first
         if let Some(cached) = self.db.get_cached_metadata(anilist_id).await? {
             // Check if cache is still valid (7 days)
-            if Utc::now().signed_duration_since(cached.cached_at).num_days() < CACHE_TTL_DAYS {
+            if Utc::now()
+                .signed_duration_since(cached.cached_at)
+                .num_days()
+                < CACHE_TTL_DAYS
+            {
                 return Ok(Some(cached));
             }
         }
@@ -273,29 +270,27 @@ impl MetadataCache {
         }
     }
 
-    pub async fn search_and_cache(
-        &self,
-        query: &str,
-    ) -> Result<Vec<AniListMetadata>> {
+    pub async fn search_and_cache(&self, query: &str) -> Result<Vec<AniListMetadata>> {
         tracing::info!("Searching AniList for: {}", query);
-        
+
         let results = self.client.search_anime(query).await?;
-        
+
         tracing::info!("AniList returned {} results for '{}'", results.len(), query);
-        
+
         // Cache all results
         for metadata in &results {
-            tracing::debug!("Caching metadata for: {} (AniList ID: {})", metadata.title, metadata.anilist_id);
+            tracing::debug!(
+                "Caching metadata for: {} (AniList ID: {})",
+                metadata.title,
+                metadata.anilist_id
+            );
             let _ = self.db.cache_metadata(metadata).await;
         }
 
         Ok(results)
     }
 
-    pub async fn enrich_anime(
-        &self,
-        base: crate::providers::Anime,
-    ) -> EnrichedAnime {
+    pub async fn enrich_anime(&self, base: crate::providers::Anime) -> EnrichedAnime {
         // Search for matching metadata
         match self.search_and_cache(&base.title).await {
             Ok(results) => {
@@ -305,7 +300,10 @@ impl MetadataCache {
             }
             Err(e) => {
                 tracing::warn!("Failed to enrich anime '{}': {}", base.title, e);
-                EnrichedAnime { base, metadata: None }
+                EnrichedAnime {
+                    base,
+                    metadata: None,
+                }
             }
         }
     }
@@ -315,11 +313,11 @@ impl MetadataCache {
         anime_list: Vec<crate::providers::Anime>,
     ) -> Vec<EnrichedAnime> {
         let mut enriched = Vec::new();
-        
+
         for anime in anime_list {
             enriched.push(self.enrich_anime(anime).await);
         }
-        
+
         enriched
     }
 }

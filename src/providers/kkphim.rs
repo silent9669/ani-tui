@@ -12,13 +12,22 @@ pub struct KkphimProvider {
     client: reqwest::Client,
 }
 
+impl Default for KkphimProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl KkphimProvider {
     pub fn new() -> Self {
         let mut headers = HeaderMap::new();
         headers.insert(header::USER_AGENT, header::HeaderValue::from_static(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         ));
-        headers.insert(header::REFERER, header::HeaderValue::from_static("https://phimmoiii.net/"));
+        headers.insert(
+            header::REFERER,
+            header::HeaderValue::from_static("https://phimmoiii.net/"),
+        );
 
         let client = reqwest::Client::builder()
             .default_headers(headers)
@@ -42,7 +51,7 @@ impl AnimeProvider for KkphimProvider {
 
     async fn search(&self, query: &str) -> Result<Vec<Anime>> {
         let search_url = format!("{}/tim-kiem", KKPHIM_API);
-        
+
         let response: serde_json::Value = self
             .client
             .get(&search_url)
@@ -65,7 +74,7 @@ impl AnimeProvider for KkphimProvider {
                         .as_str()
                         .map(|p| format!("https://img.phimapi.com/{}", p))
                         .unwrap_or_default();
-                    
+
                     let episode_count = item["episode_total"]
                         .as_str()
                         .and_then(|e| e.parse::<u32>().ok());
@@ -90,9 +99,9 @@ impl AnimeProvider for KkphimProvider {
 
     async fn get_episodes(&self, anime_id: &str) -> Result<Vec<Episode>> {
         let detail_url = format!("{}/phim/{}?embed=false", KKPHIM_API, anime_id);
-        
+
         tracing::info!("Fetching episodes from KKPhim: {}", detail_url);
-        
+
         let response: serde_json::Value = self
             .client
             .get(&detail_url)
@@ -111,23 +120,36 @@ impl AnimeProvider for KkphimProvider {
         if let Some(data) = response.get("data") {
             // Log item structure for debugging
             if let Some(item) = data.get("item") {
-                tracing::debug!("KKPhim item keys: {:?}", item.as_object().map(|o| o.keys().collect::<Vec<_>>()));
-                
+                tracing::debug!(
+                    "KKPhim item keys: {:?}",
+                    item.as_object().map(|o| o.keys().collect::<Vec<_>>())
+                );
+
                 // Try to get episode count from item.episode_total first
-                let episode_total = item["episode_total"].as_str()
+                let episode_total = item["episode_total"]
+                    .as_str()
                     .and_then(|e| e.parse::<u32>().ok());
                 tracing::info!("KKPhim episode_total: {:?}", episode_total);
-                
+
                 if let Some(episode_list) = item.get("episodes").and_then(|e| e.as_array()) {
-                    tracing::info!("Found {} episode server entries in KKPhim", episode_list.len());
-                    
+                    tracing::info!(
+                        "Found {} episode server entries in KKPhim",
+                        episode_list.len()
+                    );
+
                     for (server_idx, server) in episode_list.iter().enumerate() {
                         let server_name = server["server_name"].as_str().unwrap_or("Unknown");
                         tracing::debug!("Processing server {}: {}", server_idx, server_name);
-                        
-                        if let Some(server_data) = server.get("server_data").and_then(|s| s.as_array()) {
-                            tracing::debug!("Server {} has {} episodes", server_idx, server_data.len());
-                            
+
+                        if let Some(server_data) =
+                            server.get("server_data").and_then(|s| s.as_array())
+                        {
+                            tracing::debug!(
+                                "Server {} has {} episodes",
+                                server_idx,
+                                server_data.len()
+                            );
+
                             for ep in server_data {
                                 // Parse Vietnamese episode name: "Tập 001" -> 1
                                 let name_str = ep["name"].as_str().unwrap_or("");
@@ -138,17 +160,23 @@ impl AnimeProvider for KkphimProvider {
                                     .parse::<u32>()
                                     .unwrap_or_else(|_| {
                                         // Try extracting just numbers as fallback
-                                        name_str.chars()
+                                        name_str
+                                            .chars()
                                             .filter(|c| c.is_ascii_digit())
                                             .collect::<String>()
                                             .parse::<u32>()
                                             .unwrap_or(0)
                                     });
-                                
+
                                 if ep_number > 0 {
                                     let ep_slug = ep["slug"].as_str().unwrap_or_default();
-                                    tracing::debug!("Adding episode {} (name: {}, slug: {})", ep_number, name_str, ep_slug);
-                                    
+                                    tracing::debug!(
+                                        "Adding episode {} (name: {}, slug: {})",
+                                        ep_number,
+                                        name_str,
+                                        ep_slug
+                                    );
+
                                     episodes.push(Episode {
                                         number: ep_number,
                                         title: Some(format!("Episode {}", ep_number)),
@@ -174,9 +202,13 @@ impl AnimeProvider for KkphimProvider {
         episodes.sort_by(|a, b| a.number.cmp(&b.number));
         episodes.dedup_by(|a, b| a.number == b.number);
         let after_dedup = episodes.len();
-        
-        tracing::info!("KKPhim returned {} episodes ({} after deduplication)", before_dedup, after_dedup);
-        
+
+        tracing::info!(
+            "KKPhim returned {} episodes ({} after deduplication)",
+            before_dedup,
+            after_dedup
+        );
+
         Ok(episodes)
     }
 
@@ -189,10 +221,14 @@ impl AnimeProvider for KkphimProvider {
         let anime_slug = parts[0];
         let episode_number = parts[1];
 
-        tracing::info!("Fetching stream URL for KKPhim anime: {}, episode: {}", anime_slug, episode_number);
+        tracing::info!(
+            "Fetching stream URL for KKPhim anime: {}, episode: {}",
+            anime_slug,
+            episode_number
+        );
 
         let detail_url = format!("{}/phim/{}?embed=false", KKPHIM_API, anime_slug);
-        
+
         let response: serde_json::Value = self
             .client
             .get(&detail_url)
@@ -203,8 +239,13 @@ impl AnimeProvider for KkphimProvider {
             .await
             .context("Failed to parse KKPhim stream response")?;
 
-        tracing::debug!("KKPhim stream response structure: {:?}", 
-            response.get("data").and_then(|d| d.get("item")).map(|i| i.as_object().map(|o| o.keys().collect::<Vec<_>>())));
+        tracing::debug!(
+            "KKPhim stream response structure: {:?}",
+            response
+                .get("data")
+                .and_then(|d| d.get("item"))
+                .map(|i| i.as_object().map(|o| o.keys().collect::<Vec<_>>()))
+        );
 
         let mut stream_url = String::new();
         let mut subtitles: Vec<Subtitle> = Vec::new();
@@ -214,15 +255,24 @@ impl AnimeProvider for KkphimProvider {
         if let Some(data) = response.get("data") {
             if let Some(item) = data.get("item") {
                 if let Some(episode_list) = item.get("episodes").and_then(|e| e.as_array()) {
-                    tracing::info!("Searching for episode {} in {} episode entries", episode_number, episode_list.len());
-                    
+                    tracing::info!(
+                        "Searching for episode {} in {} episode entries",
+                        episode_number,
+                        episode_list.len()
+                    );
+
                     'outer: for (idx, ep) in episode_list.iter().enumerate() {
                         tracing::debug!("Checking episode entry {}: {:?}", idx, ep.get("name"));
-                        
-                        if let Some(server_data) = ep.get("server_data").and_then(|s| s.as_array()) {
-                            tracing::debug!("Episode entry {} has {} server entries", idx, server_data.len());
-                            
-                             for server_ep in server_data {
+
+                        if let Some(server_data) = ep.get("server_data").and_then(|s| s.as_array())
+                        {
+                            tracing::debug!(
+                                "Episode entry {} has {} server entries",
+                                idx,
+                                server_data.len()
+                            );
+
+                            for server_ep in server_data {
                                 let ep_name = server_ep["name"].as_str().unwrap_or("");
                                 // Parse Vietnamese episode name: "Tập 001" -> 1
                                 let ep_num = ep_name
@@ -231,18 +281,25 @@ impl AnimeProvider for KkphimProvider {
                                     .trim()
                                     .parse::<u32>()
                                     .unwrap_or_else(|_| {
-                                        ep_name.chars()
+                                        ep_name
+                                            .chars()
                                             .filter(|c| c.is_ascii_digit())
                                             .collect::<String>()
                                             .parse::<u32>()
                                             .unwrap_or(0)
                                     });
                                 let search_num = episode_number.parse::<u32>().unwrap_or(0);
-                                tracing::debug!("Comparing '{}' (parsed: {}) with '{}' (parsed: {})", ep_name, ep_num, episode_number, search_num);
-                                
+                                tracing::debug!(
+                                    "Comparing '{}' (parsed: {}) with '{}' (parsed: {})",
+                                    ep_name,
+                                    ep_num,
+                                    episode_number,
+                                    search_num
+                                );
+
                                 if ep_num == search_num {
                                     tracing::info!("Found matching episode {}", episode_number);
-                                    
+
                                     if let Some(link) = server_ep["link_m3u8"].as_str() {
                                         stream_url = link.to_string();
                                         tracing::info!("Found m3u8 stream URL: {}", stream_url);
@@ -252,13 +309,13 @@ impl AnimeProvider for KkphimProvider {
                                     } else {
                                         tracing::warn!("No stream URL found in server_ep");
                                     }
-                                    
+
                                     // KKPhim provides Vietnamese hardcoded subtitles in the video
                                     subtitles.push(Subtitle {
                                         language: "vi".to_string(),
                                         url: String::new(),
                                     });
-                                    
+
                                     break 'outer;
                                 }
                             }
@@ -275,14 +332,22 @@ impl AnimeProvider for KkphimProvider {
         }
 
         if stream_url.is_empty() {
-            tracing::error!("No working stream URL found for episode {} of {}", episode_number, anime_slug);
+            tracing::error!(
+                "No working stream URL found for episode {} of {}",
+                episode_number,
+                anime_slug
+            );
             anyhow::bail!("No working stream URL found for this episode.");
         }
 
         headers.insert("Referer".to_string(), "https://phimmoiii.net/".to_string());
         headers.insert("Origin".to_string(), "https://phimmoiii.net".to_string());
 
-        tracing::info!("Returning stream URL: {} (length: {})", stream_url, stream_url.len());
+        tracing::info!(
+            "Returning stream URL: {} (length: {})",
+            stream_url,
+            stream_url.len()
+        );
 
         Ok(StreamInfo {
             video_url: stream_url,

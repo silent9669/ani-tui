@@ -34,7 +34,7 @@ pub struct ImageCache {
 impl Database {
     pub async fn new() -> Result<Self> {
         let db_path = Self::default_db_path()?;
-        
+
         // Ensure parent directory exists
         if let Some(parent) = db_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
@@ -127,7 +127,7 @@ impl Database {
 
     pub async fn save_watch_history(&self, history: &WatchHistory) -> Result<()> {
         let conn = self.conn.lock().await;
-        
+
         conn.execute(
             "INSERT OR REPLACE INTO watch_history 
              (anime_id, provider, title, cover_url, episode_number, episode_title, 
@@ -151,40 +151,44 @@ impl Database {
 
     pub async fn get_watch_history(&self, anime_id: &str) -> Result<Option<WatchHistory>> {
         let conn = self.conn.lock().await;
-        
+
         let mut stmt = conn.prepare(
             "SELECT anime_id, provider, title, cover_url, episode_number, episode_title,
                     position_seconds, total_seconds, updated_at
-             FROM watch_history WHERE anime_id = ?1"
+             FROM watch_history WHERE anime_id = ?1",
         )?;
 
-        let history = stmt.query_row([anime_id], |row| {
-            Ok(WatchHistory {
-                anime_id: row.get(0)?,
-                provider: row.get(1)?,
-                title: row.get(2)?,
-                cover_url: row.get(3)?,
-                episode_number: row.get(4)?,
-                episode_title: row.get(5)?,
-                position_seconds: row.get(6)?,
-                total_seconds: row.get(7)?,
-                updated_at: row.get::<_, String>(8)?.parse().unwrap_or_else(|_| Utc::now()),
+        let history = stmt
+            .query_row([anime_id], |row| {
+                Ok(WatchHistory {
+                    anime_id: row.get(0)?,
+                    provider: row.get(1)?,
+                    title: row.get(2)?,
+                    cover_url: row.get(3)?,
+                    episode_number: row.get(4)?,
+                    episode_title: row.get(5)?,
+                    position_seconds: row.get(6)?,
+                    total_seconds: row.get(7)?,
+                    updated_at: row
+                        .get::<_, String>(8)?
+                        .parse()
+                        .unwrap_or_else(|_| Utc::now()),
+                })
             })
-        }).ok();
+            .ok();
 
         Ok(history)
     }
 
-    pub async fn get_continue_watching(&self, limit: usize,
-) -> Result<Vec<WatchHistory>> {
+    pub async fn get_continue_watching(&self, limit: usize) -> Result<Vec<WatchHistory>> {
         let conn = self.conn.lock().await;
-        
+
         let mut stmt = conn.prepare(
             "SELECT anime_id, provider, title, cover_url, episode_number, episode_title,
                     position_seconds, total_seconds, updated_at
              FROM watch_history 
              ORDER BY updated_at DESC
-             LIMIT ?1"
+             LIMIT ?1",
         )?;
 
         let histories: Vec<WatchHistory> = stmt
@@ -198,7 +202,10 @@ impl Database {
                     episode_title: row.get(5)?,
                     position_seconds: row.get(6)?,
                     total_seconds: row.get(7)?,
-                    updated_at: row.get::<_, String>(8)?.parse().unwrap_or_else(|_| Utc::now()),
+                    updated_at: row
+                        .get::<_, String>(8)?
+                        .parse()
+                        .unwrap_or_else(|_| Utc::now()),
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -208,49 +215,46 @@ impl Database {
 
     pub async fn remove_from_continue_watching(&self, anime_id: &str) -> Result<()> {
         let conn = self.conn.lock().await;
-        
+
         conn.execute(
             "DELETE FROM watch_history WHERE anime_id = ?1",
             params![anime_id],
         )?;
-        
+
         Ok(())
     }
 
-    pub async fn cache_image(&self, id: &str, url: &str, data: &[u8],
-    ) -> Result<()> {
+    pub async fn cache_image(&self, id: &str, url: &str, data: &[u8]) -> Result<()> {
         let conn = self.conn.lock().await;
-        
+
         conn.execute(
             "INSERT OR REPLACE INTO image_cache (id, url, data, accessed_at)
              VALUES (?1, ?2, ?3, ?4)",
-            params![
-                id,
-                url,
-                data,
-                Utc::now().to_rfc3339(),
-            ],
+            params![id, url, data, Utc::now().to_rfc3339(),],
         )?;
 
         Ok(())
     }
 
-    pub async fn get_cached_image(&self, id: &str,
-    ) -> Result<Option<ImageCache>> {
+    pub async fn get_cached_image(&self, id: &str) -> Result<Option<ImageCache>> {
         let conn = self.conn.lock().await;
-        
-        let mut stmt = conn.prepare(
-            "SELECT id, url, data, accessed_at FROM image_cache WHERE id = ?1"
-        )?;
 
-        let cache = stmt.query_row([id], |row| {
-            Ok(ImageCache {
-                id: row.get(0)?,
-                url: row.get(1)?,
-                data: row.get(2)?,
-                accessed_at: row.get::<_, String>(3)?.parse().unwrap_or_else(|_| Utc::now()),
+        let mut stmt =
+            conn.prepare("SELECT id, url, data, accessed_at FROM image_cache WHERE id = ?1")?;
+
+        let cache = stmt
+            .query_row([id], |row| {
+                Ok(ImageCache {
+                    id: row.get(0)?,
+                    url: row.get(1)?,
+                    data: row.get(2)?,
+                    accessed_at: row
+                        .get::<_, String>(3)?
+                        .parse()
+                        .unwrap_or_else(|_| Utc::now()),
+                })
             })
-        }).ok();
+            .ok();
 
         // Update access time
         if cache.is_some() {
@@ -263,10 +267,9 @@ impl Database {
         Ok(cache)
     }
 
-    pub async fn cleanup_old_images(&self, max_size_mb: usize,
-    ) -> Result<()> {
+    pub async fn cleanup_old_images(&self, max_size_mb: usize) -> Result<()> {
         let conn = self.conn.lock().await;
-        
+
         // Calculate current cache size
         let size_mb: f64 = conn.query_row(
             "SELECT COALESCE(SUM(LENGTH(data)), 0) / (1024.0 * 1024.0) FROM image_cache",
@@ -277,7 +280,7 @@ impl Database {
         if size_mb > max_size_mb as f64 {
             // Delete oldest entries until under limit
             let to_delete = ((size_mb - max_size_mb as f64) / 0.5) as i64;
-            
+
             conn.execute(
                 "DELETE FROM image_cache WHERE id IN (
                     SELECT id FROM image_cache ORDER BY accessed_at ASC LIMIT ?1
@@ -289,10 +292,7 @@ impl Database {
         Ok(())
     }
 
-    pub async fn cache_metadata(
-        &self,
-        metadata: &crate::metadata::AniListMetadata,
-    ) -> Result<()> {
+    pub async fn cache_metadata(&self, metadata: &crate::metadata::AniListMetadata) -> Result<()> {
         let conn = self.conn.lock().await;
 
         conn.execute(
@@ -325,21 +325,26 @@ impl Database {
              FROM metadata_cache WHERE anilist_id = ?1"
         )?;
 
-        let metadata = stmt.query_row([anilist_id], |row| {
-            let genres_str: String = row.get(5)?;
-            let genres: Vec<String> = serde_json::from_str(&genres_str).unwrap_or_default();
+        let metadata = stmt
+            .query_row([anilist_id], |row| {
+                let genres_str: String = row.get(5)?;
+                let genres: Vec<String> = serde_json::from_str(&genres_str).unwrap_or_default();
 
-            Ok(crate::metadata::AniListMetadata {
-                anilist_id: row.get(0)?,
-                title: row.get(1)?,
-                description: row.get(2)?,
-                rating: row.get(3)?,
-                cover_url: row.get(4)?,
-                genres,
-                episode_count: row.get(6)?,
-                cached_at: row.get::<_, String>(7)?.parse().unwrap_or_else(|_| Utc::now()),
+                Ok(crate::metadata::AniListMetadata {
+                    anilist_id: row.get(0)?,
+                    title: row.get(1)?,
+                    description: row.get(2)?,
+                    rating: row.get(3)?,
+                    cover_url: row.get(4)?,
+                    genres,
+                    episode_count: row.get(6)?,
+                    cached_at: row
+                        .get::<_, String>(7)?
+                        .parse()
+                        .unwrap_or_else(|_| Utc::now()),
+                })
             })
-        }).ok();
+            .ok();
 
         Ok(metadata)
     }
@@ -402,17 +407,12 @@ impl Database {
             "SELECT anime_id, provider, title, cover_url
              FROM favorites 
              ORDER BY added_at DESC
-             LIMIT ?1"
+             LIMIT ?1",
         )?;
 
         let favorites: Vec<(String, String, String, String)> = stmt
             .query_map([limit], |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                ))
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
             })?
             .collect::<Result<_, _>>()?;
 

@@ -3,7 +3,7 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     #[serde(default)]
     pub player: PlayerConfig,
@@ -100,17 +100,6 @@ impl Default for SourcesConfig {
     }
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            player: PlayerConfig::default(),
-            ui: UiConfig::default(),
-            sources: SourcesConfig::default(),
-            prowlarr: None,
-        }
-    }
-}
-
 impl Config {
     pub async fn load(path: Option<&str>) -> Result<Self> {
         let config_path = if let Some(p) = path {
@@ -120,7 +109,10 @@ impl Config {
         };
 
         if !config_path.exists() {
-            tracing::info!("Config file not found, creating default at {:?}", config_path);
+            tracing::info!(
+                "Config file not found, creating default at {:?}",
+                config_path
+            );
             let config = Config::default();
             config.save(&config_path).await?;
             return Ok(config);

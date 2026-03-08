@@ -64,8 +64,7 @@ impl AsciiRenderer {
 
         // Use image_ascii for in-memory image rendering
         // First, parse the image data using the image crate
-        let img = image::load_from_memory(image_data)
-            .context("Failed to parse image data")?;
+        let img = image::load_from_memory(image_data).context("Failed to parse image data")?;
 
         // Create ASCII text generator
         let generator = image_ascii::TextGenerator::new(&img);
@@ -109,13 +108,9 @@ impl ImagePipeline {
 
                 tokio::spawn(async move {
                     let _permit = permit;
-                    let result = Self::download_and_cache(
-                        client,
-                        cache,
-                        db,
-                        &request.id,
-                        &request.url,
-                    ).await;
+                    let result =
+                        Self::download_and_cache(client, cache, db, &request.id, &request.url)
+                            .await;
 
                     let _ = result_tx.send(result).await;
                 });
@@ -140,7 +135,7 @@ impl ImagePipeline {
         // Check disk cache first
         if let Some(cached) = db.get_cached_image(id).await? {
             tracing::debug!("Image {} loaded from disk cache", id);
-            
+
             // Add to memory cache
             let image = CachedImage {
                 id: id.to_string(),
@@ -148,11 +143,11 @@ impl ImagePipeline {
                 data: cached.data.clone(),
                 accessed_at: std::time::Instant::now(),
             };
-            
+
             let mut cache_guard = cache.write().await;
             Self::insert_into_memory_cache(&mut cache_guard, id.to_string(), image);
             drop(cache_guard);
-            
+
             return Ok(cached.data);
         }
 
@@ -190,7 +185,7 @@ impl ImagePipeline {
                 .iter()
                 .min_by_key(|(_, v)| v.accessed_at)
                 .map(|(k, _)| k.clone());
-            
+
             if let Some(oldest_id) = oldest_id {
                 cache.remove(&oldest_id);
             }
@@ -199,9 +194,7 @@ impl ImagePipeline {
         cache.insert(id, image);
     }
 
-    pub async fn get_image(&self,
-        id: &str,
-    ) -> Option<CachedImage> {
+    pub async fn get_image(&self, id: &str) -> Option<CachedImage> {
         // Check memory cache first
         let cache_guard = self.memory_cache.read().await;
         if let Some(image) = cache_guard.get(id) {
@@ -212,10 +205,7 @@ impl ImagePipeline {
         None
     }
 
-    pub async fn request_download(&self,
-        id: String,
-        url: String,
-    ) -> Result<Vec<u8>> {
+    pub async fn request_download(&self, id: String, url: String) -> Result<Vec<u8>> {
         // Check memory cache first
         let cache_guard = self.memory_cache.read().await;
         if let Some(image) = cache_guard.get(&id) {
@@ -242,11 +232,7 @@ impl ImagePipeline {
 
         // Send download request
         let (result_tx, mut result_rx) = mpsc::channel(1);
-        let request = DownloadRequest {
-            id,
-            url,
-            result_tx,
-        };
+        let request = DownloadRequest { id, url, result_tx };
 
         let _ = self.download_tx.send(request).await;
 
@@ -269,11 +255,7 @@ impl ImagePipeline {
 
             // Send download request without waiting
             let (result_tx, _result_rx) = mpsc::channel(1);
-            let request = DownloadRequest {
-                id,
-                url,
-                result_tx,
-            };
+            let request = DownloadRequest { id, url, result_tx };
             let _ = self.download_tx.send(request).await;
         }
     }

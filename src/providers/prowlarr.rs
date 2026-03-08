@@ -73,10 +73,7 @@ impl ProwlarrProvider {
             .context("Failed to search Prowlarr")?;
 
         if !response.status().is_success() {
-            anyhow::bail!(
-                "Prowlarr search failed with status: {}",
-                response.status()
-            );
+            anyhow::bail!("Prowlarr search failed with status: {}", response.status());
         }
 
         let results: Vec<SearchResult> = response
@@ -164,10 +161,7 @@ impl AnimeProvider for ProwlarrProvider {
             .context("Failed to initiate download")?;
 
         if !response.status().is_success() {
-            anyhow::bail!(
-                "Failed to grab release with status: {}",
-                response.status()
-            );
+            anyhow::bail!("Failed to grab release with status: {}", response.status());
         }
 
         anyhow::bail!(

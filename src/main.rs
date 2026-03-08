@@ -1,6 +1,11 @@
-use anyhow::Result;
+#![allow(clippy::collapsible_if)]
+#![allow(clippy::collapsible_else_if)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::too_many_lines)]
+
 use ani_tui::config::Config;
 use ani_tui::ui::App;
+use anyhow::Result;
 use clap::Parser;
 use std::sync::Arc;
 
@@ -39,7 +44,7 @@ async fn main() -> Result<()> {
 
     // Run TUI application
     let mut app = App::new(config, db).await?;
-    
+
     if let Some(query) = cli.query {
         app.set_initial_search(query);
     }
