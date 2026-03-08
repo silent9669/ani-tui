@@ -1,0 +1,35 @@
+name: Homebrew Audit
+
+on:
+  pull_request:
+    paths:
+      - 'packaging/homebrew/**'
+      - '.github/workflows/brew-audit.yml'
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+
+      - name: Generate test formula
+        run: |
+          ruby scripts/generate-homebrew-formula.rb "v0.0.0-test" test-formula.rb
+
+      - name: Run brew audit
+        run: |
+          brew audit --strict --online test-formula.rb
+
+      - name: Check Ruby style
+        run: |
+          gem install rubocop --no-document
+          rubocop --only Layout,Style packaging/homebrew/ani-tui.rb.template || true
+
+      - name: Cleanup
+        run: rm -f test-formula.rb

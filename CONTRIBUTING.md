@@ -1,6 +1,122 @@
 # Contributing to ani-tui
 
-Thank you for your interest in contributing to ani-tui! This document provides guidelines for contributing to the project.
+Thank you for your interest in contributing to ani-tui! This document provides guidelines and workflows for contributing.
+
+## Table of Contents
+
+- [Development Setup](#development-setup)
+- [Image Rendering Changes](#image-rendering-changes)
+- [Testing](#testing)
+- [Pull Request Process](#pull-request-process)
+
+## Development Setup
+
+### Prerequisites
+
+- Rust 1.70 or later
+- chafa (for image rendering)
+- mpv (for video playback)
+
+### Building from Source
+
+```bash
+git clone https://github.com/silent9669/ani-tui
+cd ani-tui
+cargo build --release
+```
+
+### Running Tests
+
+```bash
+cargo test --release
+```
+
+## Image Rendering Changes
+
+The image rendering system is complex and critical to the application. **All changes to image rendering must be documented.**
+
+### Pre-Commit Hook
+
+A pre-commit hook automatically detects changes to `src/ui/image_renderer.rs` and reminds you to update the documentation.
+
+To install the hook:
+```bash
+# Use the versioned hooks directory
+git config core.hooksPath .githooks
+```
+
+### Documentation Update Workflow
+
+When you modify image rendering code:
+
+1. **Make your changes** to `src/ui/image_renderer.rs`
+
+2. **Run the documentation helper script:**
+   ```bash
+   ./scripts/update-image-docs.sh
+   ```
+
+3. **Follow the prompts** to add a changelog entry
+
+4. **Stage the documentation changes:**
+   ```bash
+   git add docs/IMAGE_RENDERING.md
+   git commit -m "fix(image): description of change"
+   ```
+
+### Changelog Format
+
+See `docs/IMAGE_RENDERING.md` for the changelog template and examples.
+
+## Testing with Daytona
+
+We use Daytona sandboxes for multi-platform testing.
+
+### Setup
+
+1. **Install Daytona CLI:**
+   ```bash
+   brew install daytonaio/tap/daytona
+   ```
+
+2. **Configure API key:**
+   ```bash
+   export DAYTONA_API_KEY="your-api-key"
+   ```
+
+### Running Tests
+
+```bash
+# Test on Linux
+./scripts/daytona-test.sh ani-tui-linux test
+
+# Test on macOS Intel
+./scripts/daytona-test.sh ani-tui-macos-intel test
+
+# Test on macOS ARM
+./scripts/daytona-test.sh ani-tui-macos-arm test
+
+# Test on Windows
+./scripts/daytona-test.sh ani-tui-windows test
+```
+
+## Pull Request Process
+
+1. **Create a feature branch**
+2. **Make your changes**
+3. **Run quality checks:**
+   ```bash
+   cargo fmt --all -- --check
+   cargo clippy --all-targets --all-features -- -D warnings
+   cargo test --release
+   ```
+4. **Update documentation** (especially for image rendering changes)
+5. **Commit with conventional format:**
+   - `feat: add new feature`
+   - `fix(image): resolve flickering issue`
+   - `docs: update changelog`
+6. **Push and create PR**
+7. **Ensure CI passes**
 
 ## Development Setup
 

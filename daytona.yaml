@@ -1,0 +1,87 @@
+# Daytona Sandbox Configuration for ani-tui
+# Multi-platform testing environments
+
+api_version: v1
+project_name: ani-tui
+
+# Default sandbox settings
+defaults:
+  image: ubuntu:22.04
+  resources:
+    cpu: 2
+    memory: 4GB
+    disk: 10GB
+  timeout: 30m
+
+# Sandbox definitions for different platforms
+sandboxes:
+  - name: ani-tui-macos-intel
+    description: "macOS Intel (x86_64) cross-compile test"
+    image: ubuntu:22.04
+    resources:
+      cpu: 2
+      memory: 4GB
+      disk: 10GB
+    env:
+      TARGET: x86_64-apple-darwin
+      RUST_BACKTRACE: 1
+    prebuild: |
+      apt-get update && apt-get install -y curl build-essential libssl-dev pkg-config
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      . $HOME/.cargo/env
+      rustup target add x86_64-apple-darwin
+
+  - name: ani-tui-macos-arm
+    description: "macOS Apple Silicon (ARM64) cross-compile test"
+    image: ubuntu:22.04
+    resources:
+      cpu: 2
+      memory: 4GB
+      disk: 10GB
+    env:
+      TARGET: aarch64-apple-darwin
+      RUST_BACKTRACE: 1
+    prebuild: |
+      apt-get update && apt-get install -y curl build-essential libssl-dev pkg-config
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      . $HOME/.cargo/env
+      rustup target add aarch64-apple-darwin
+
+  - name: ani-tui-windows
+    description: "Windows x86_64 cross-compile test"
+    image: ubuntu:22.04
+    resources:
+      cpu: 2
+      memory: 4GB
+      disk: 10GB
+    env:
+      TARGET: x86_64-pc-windows-gnu
+      RUST_BACKTRACE: 1
+    prebuild: |
+      apt-get update && apt-get install -y curl build-essential mingw-w64 libssl-dev pkg-config
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      . $HOME/.cargo/env
+      rustup target add x86_64-pc-windows-gnu
+
+  - name: ani-tui-linux
+    description: "Linux x86_64 native build test"
+    image: ubuntu:22.04
+    resources:
+      cpu: 2
+      memory: 4GB
+      disk: 10GB
+    env:
+      TARGET: x86_64-unknown-linux-gnu
+      RUST_BACKTRACE: 1
+    prebuild: |
+      apt-get update && apt-get install -y curl build-essential libssl-dev pkg-config
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      . $HOME/.cargo/env
+
+# Test commands to run in each sandbox
+test_commands:
+  build: "cargo build --release --target $TARGET"
+  test: "cargo test --release --target $TARGET"
+  check: "cargo check --release --target $TARGET"
+  clippy: "cargo clippy --all-targets --all-features -- -D warnings"
+  fmt: "cargo fmt --all -- --check"

@@ -187,6 +187,14 @@ impl PlayerController {
         self.current_anime.as_ref().map(|(a, _)| a)
     }
 
+    pub fn current_anime_and_episodes(
+        &self,
+    ) -> Option<(crate::providers::Anime, Vec<crate::providers::Episode>)> {
+        self.current_anime
+            .as_ref()
+            .map(|(a, eps)| (a.clone(), eps.clone()))
+    }
+
     pub fn total_episodes(&self) -> usize {
         self.current_anime
             .as_ref()
@@ -266,51 +274,13 @@ impl EpisodeListModal {
     pub fn render(
         episodes: &[crate::providers::Episode],
         current_idx: usize,
-        scroll_offset: usize,
-        visible_count: usize,
-    ) -> Vec<(ratatui::text::Line<'static>, usize)> {
-        use ratatui::style::{Color, Modifier, Style};
-        use ratatui::text::{Line, Span};
-
-        let mut lines = vec![];
-        let end_idx = (scroll_offset + visible_count).min(episodes.len());
-
-        for (idx, ep) in episodes
-            .iter()
-            .enumerate()
-            .skip(scroll_offset)
-            .take(end_idx - scroll_offset)
-        {
-            let is_current = idx == current_idx;
-            let is_selected = idx == current_idx;
-
-            let prefix = if is_selected { "▶ " } else { "  " };
-
-            let style = if is_current {
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD)
-            } else if is_selected {
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-
-            let ep_title = ep
-                .title
-                .as_ref()
-                .map(|t| format!("{}", t))
-                .unwrap_or_else(|| format!("Episode {}", ep.number));
-
-            lines.push((
-                Line::from(vec![Span::raw(prefix), Span::styled(ep_title, style)]),
-                idx,
-            ));
-        }
-
-        lines
+        selected_idx: usize,
+        area_width: u16,
+        area_height: u16,
+    ) -> Vec<ratatui::text::Line<'static>> {
+        use ratatui::layout::Rect;
+        let area = Rect::new(0, 0, area_width, area_height);
+        crate::ui::components::EpisodeGrid::render_simple(episodes, current_idx, selected_idx, area)
     }
 }
 

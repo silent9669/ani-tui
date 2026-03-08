@@ -6,7 +6,7 @@ use crate::player::Player;
 use crate::providers::{AnimeProvider, Episode, Language, ProviderRegistry};
 use crate::ui::components::{LoadingSpinner, Toast};
 use crate::ui::image_renderer::ImageRenderer;
-use crate::ui::modern_components::{PreviewPanel, SearchOverlay, SourceSelectModal, SplashScreen};
+use crate::ui::modern_components::{PreviewPanel, SearchOverlay, SplashScreen};
 use crate::ui::player_controller::{ControlAction, PlayerController, PlayerState};
 use anyhow::Result;
 use crossterm::{
@@ -112,10 +112,15 @@ pub struct App {
 
     // Trigger preview load when entering search
     needs_preview_load: bool,
+    
+    // Trigger continue watching refresh when entering home
+    needs_continue_watching_refresh: bool,
 
-    // Episode list modal in player
+    source_modal_for_search: bool,
+
     show_episode_list: bool,
     episode_list_scroll: usize,
+    episode_list_selected: usize,
 
     // Episode selection screen (Phase 3: grid layout with pagination)
     episode_filter: String,
@@ -223,8 +228,10 @@ impl App {
             previous_screen: None,
             preloaded_image_ids,
             needs_preview_load: false,
+            needs_continue_watching_refresh: false,
             show_episode_list: false,
             episode_list_scroll: 0,
+            episode_list_selected: 0,
             episode_filter: String::new(),
             episode_filter_mode: false,
             episode_selected_index: 0,
@@ -241,6 +248,7 @@ impl App {
             image_loading: false,
             // Preloaded images cache
             preloaded_images: std::collections::HashMap::new(),
+            source_modal_for_search: false,
         })
     }
 
@@ -291,24 +299,19 @@ impl App {
             if event::poll(timeout)? {
                 if let Event::Key(key) = event::read()? {
                     if key.kind == KeyEventKind::Press {
-                        // Handle Shift+S for search
                         if key.code == KeyCode::Char('S') {
                             if self.current_screen == Screen::Home {
-                                // Clear terminal graphics FIRST (before clearing cache)
-                                // This ensures we clear the area that was last rendered
-                                let _ = self.image_renderer.clear_terminal_graphics();
-                                
-                                // Clear all image state for clean search entry
+                                // Clear images before transitioning to source select
+                                if self.image_renderer.requires_terminal_clear() {
+                                    let _ = self.image_renderer.clear_terminal_graphics();
+                                }
                                 self.current_image_data = None;
                                 self.current_anime_id = None;
                                 self.previous_image_data = None;
                                 self.in_transition = false;
                                 self.image_renderer.clear_cache();
-                                // Reset preview anime tracking to ensure clean state
                                 self.last_preview_anime_id = None;
-                                // Switch to search screen
-                                self.current_screen = Screen::Search;
-                                self.needs_preview_load = true;
+                                self.current_screen = Screen::SourceSelect;
                                 continue;
                             }
                         }
@@ -368,12 +371,66 @@ impl App {
     fn draw_source_select(&mut self, frame: &mut Frame) {
         let area = frame.size();
 
+        // Full-screen source select layout
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Percentage(30), // Top padding
+                Constraint::Length(3),      // Title
+                Constraint::Length(6),      // Source options
+                Constraint::Length(3),      // Help text
+                Constraint::Percentage(30), // Bottom padding
+            ])
+            .split(area);
+
+        // Title
+        let title = Paragraph::new("Select Source")
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+        frame.render_widget(title, chunks[1]);
+
+        // Source options
         let sources: Vec<(String, Language, bool)> = vec![
-            ("AllAnime".to_string(), Language::English, self.selected_source == Language::English),
-            ("KKPhim".to_string(), Language::Vietnamese, self.selected_source == Language::Vietnamese),
+            ("AllAnime (English)".to_string(), Language::English, self.selected_source == Language::English),
+            ("KKPhim (Vietnamese)".to_string(), Language::Vietnamese, self.selected_source == Language::Vietnamese),
         ];
 
-        SourceSelectModal::render(frame, area, &sources, self.selected_source_idx);
+        let mut lines: Vec<Line> = Vec::new();
+        for (idx, (name, lang, enabled)) in sources.iter().enumerate() {
+            let is_selected = idx == self.selected_source_idx;
+            let prefix = if is_selected { "▶ " } else { "  " };
+            let radio = if *enabled { "(◉)" } else { "(○)" };
+
+            let lang_badge = match lang {
+                Language::English => Span::styled("[EN]", Style::default().fg(Color::Blue)),
+                Language::Vietnamese => Span::styled("[VN]", Style::default().fg(Color::Yellow)),
+            };
+
+            let style = if is_selected {
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
+            lines.push(Line::from(vec![
+                Span::raw(prefix),
+                Span::styled(format!("{} ", radio), style),
+                lang_badge,
+                Span::raw(" "),
+                Span::styled(name.clone(), style),
+            ]));
+            lines.push(Line::from(""));
+        }
+
+        let options = Paragraph::new(Text::from(lines))
+            .alignment(Alignment::Center);
+        frame.render_widget(options, chunks[2]);
+
+        // Help text
+        let help = Paragraph::new("↑/↓: Select | Enter: Confirm | Esc: Cancel")
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::Gray));
+        frame.render_widget(help, chunks[3]);
     }
 
     fn draw_home(&mut self, frame: &mut Frame) {
@@ -418,7 +475,7 @@ impl App {
     ) {
         let mut history_lines: Vec<Line> = Vec::new();
 
-        for (idx, history) in self.continue_watching.iter().take(5).enumerate() {
+        for (idx, history) in self.continue_watching.iter().enumerate() {
             let is_selected = idx == self.continue_watching_selected;
             
             let prefix = if is_selected { "▶ " } else { "  " };
@@ -644,43 +701,37 @@ impl App {
             return;
         }
 
-        // Check if image data changed
+        if self.last_image_render.elapsed().as_millis() < 33 {
+            let border_only = Block::default().borders(Borders::ALL).title("Cover Image");
+            frame.render_widget(border_only, area);
+            return;
+        }
+
         let needs_update = match &self.current_image_data {
             Some(prev_data) => prev_data != image_data,
             None => true,
         };
 
-        // Render border first to establish the frame
-        let border_only = Block::default()
-            .borders(Borders::ALL)
-            .title("Cover Image");
-        
-        // Calculate inner area (inside borders) for image
+        let border_only = Block::default().borders(Borders::ALL).title("Cover Image");
         let inner_area = border_only.inner(area);
-        
-        // Render border
         frame.render_widget(border_only, area);
         
         if needs_update {
-            // Clear terminal graphics if using Kitty protocol
             if self.image_renderer.requires_terminal_clear() {
                 if let Err(e) = self.image_renderer.clear_terminal_graphics() {
                     tracing::warn!("Failed to clear terminal graphics: {}", e);
                 }
             }
-            // Clear cache when switching to a new image
             self.image_renderer.clear_cache();
             self.current_image_data = Some(image_data.to_vec());
         }
         
-        // Always render image (iTerm2 is stateless and needs redraw each frame)
         match self.image_renderer.render(image_data, inner_area) {
             Ok(_) => {
-                // Image rendered successfully via escape codes (Kitty, iTerm2, or Sixel)
                 tracing::debug!("Image rendered in inner area {:?}", inner_area);
+                self.last_image_render = Instant::now();
             }
             Err(e) => {
-                // Show error details inside the bordered area
                 tracing::warn!("Image render error: {}", e);
                 let error_lines = e.to_lines();
                 let error_widget = Paragraph::new(ratatui::text::Text::from(error_lines))
@@ -702,22 +753,29 @@ impl App {
     fn draw_search(&mut self, frame: &mut Frame) {
         let area = frame.size();
 
-        // Split into search results and preview
         let main_layout = Layout::default()
-            .direction(Direction::Horizontal)
+            .direction(Direction::Vertical)
             .margin(1)
-            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .constraints([Constraint::Min(0), Constraint::Length(1)])
             .split(area);
 
-        // Draw search overlay in left panel
+        let content_layout = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .split(main_layout[0]);
+
         self.search_overlay.results = self.enriched_results.clone();
         self.search_overlay.selected_index = self.selected_index;
         self.search_overlay.is_searching = self.search_overlay.query.len() >= 2 && self.enriched_results.is_empty();
-        self.search_overlay.render(frame, main_layout[0], &[self.selected_source]);
+        self.search_overlay.render(frame, content_layout[0], &[self.selected_source]);
 
-        // Draw preview panel in right panel
         let selected_anime = self.enriched_results.get(self.selected_index).cloned();
-        PreviewPanel::render(frame, main_layout[1], selected_anime.as_ref(), self);
+        PreviewPanel::render(frame, content_layout[1], selected_anime.as_ref(), self);
+
+        let status_bar = Paragraph::new("Shift+C: Change Source | ESC: Back Home | ↑/↓: Navigate | Enter: Select")
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::Gray));
+        frame.render_widget(status_bar, main_layout[1]);
     }
 
     fn draw_episode_select(&mut self, frame: &mut Frame) {
@@ -1056,22 +1114,15 @@ impl App {
             .borders(Borders::ALL)
             .title("Choose Episode");
 
-        let visible_count = (area.height as usize).saturating_sub(2);
-        let episodes = &self.episodes;
-        let current_ep = self.player_controller.current_episode_idx();
-        
         let lines = crate::ui::player_controller::EpisodeListModal::render(
-            episodes,
-            current_ep,
-            self.episode_list_scroll,
-            visible_count,
+            &self.episodes,
+            self.player_controller.current_episode_idx(),
+            self.episode_list_selected,
+            area.width.saturating_sub(2),
+            area.height.saturating_sub(2),
         );
 
-        let text: Vec<Line> = lines.into_iter().map(|(line, _)| line).collect();
-        
-        let paragraph = Paragraph::new(Text::from(text))
-            .block(block);
-
+        let paragraph = Paragraph::new(Text::from(lines)).block(block);
         frame.render_widget(paragraph, area);
     }
 
@@ -1107,16 +1158,76 @@ impl App {
     }
 
     fn draw_source_modal(&mut self, frame: &mut Frame) {
-        let area = centered_rect(50, 40, frame.size());
+        let frame_area = frame.size();
         
-        frame.render_widget(Clear, area);
+        // Create a smaller, centered modal area (40% width, 30% height)
+        let modal_width = ((frame_area.width as f32 * 0.4).min(50.0).max(35.0)) as u16;
+        let modal_height = 12u16; // Fixed height for 2 sources + header + footer
+        
+        let modal_area = Rect {
+            x: frame_area.x + (frame_area.width.saturating_sub(modal_width)) / 2,
+            y: frame_area.y + (frame_area.height.saturating_sub(modal_height)) / 2,
+            width: modal_width,
+            height: modal_height,
+        };
+        
+        frame.render_widget(Clear, modal_area);
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title("Select Source (Enter to confirm)");
+
+        let inner_area = block.inner(modal_area);
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(2), Constraint::Min(0)])
+            .split(inner_area);
+
+        let caption = Paragraph::new("Select subtitle language:")
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+        frame.render_widget(caption, chunks[0]);
 
         let sources: Vec<(String, Language, bool)> = vec![
             ("AllAnime (English)".to_string(), Language::English, self.selected_source == Language::English),
             ("KKPhim (Vietnamese)".to_string(), Language::Vietnamese, self.selected_source == Language::Vietnamese),
         ];
 
-        SourceSelectModal::render(frame, area, &sources, self.selected_source_idx);
+        let mut lines: Vec<Line> = Vec::new();
+        for (idx, (name, lang, enabled)) in sources.iter().enumerate() {
+            let is_selected = idx == self.selected_source_idx;
+            let prefix = if is_selected { "▶ " } else { "  " };
+            let radio = if *enabled { "(◉)" } else { "(○)" };
+
+            let lang_badge = match lang {
+                Language::English => Span::styled("[EN]", Style::default().fg(Color::Blue)),
+                Language::Vietnamese => Span::styled("[VN]", Style::default().fg(Color::Yellow)),
+            };
+
+            let style = if is_selected {
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
+            lines.push(Line::from(vec![
+                Span::raw(prefix),
+                Span::styled(radio.to_string(), style),
+                Span::raw(" "),
+                lang_badge,
+                Span::raw(" "),
+                Span::styled(name.clone(), style),
+            ]));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(
+            Span::styled("Only one source can be active", Style::default().fg(Color::Gray))
+        ));
+
+        let paragraph = Paragraph::new(Text::from(lines)).alignment(Alignment::Center);
+        frame.render_widget(paragraph, chunks[1]);
+        frame.render_widget(block, modal_area);
     }
 
     fn draw_toast(&self, frame: &mut Frame, toast: &Toast) {
@@ -1214,14 +1325,24 @@ impl App {
         
         match key {
             KeyCode::Esc | KeyCode::Char('b') => {
-                // Go back to previous screen (Dashboard or Search)
                 let target = self.previous_screen.take().unwrap_or(Screen::Home);
+                if target == Screen::Player {
+                    self.player_controller.show_controls();
+                }
                 self.current_screen = target;
-                self.episodes.clear();
+                if target != Screen::Player {
+                    self.episodes.clear();
+                }
                 self.episode_selected_index = 0;
                 self.episode_current_page = 0;
                 self.episode_filter.clear();
                 self.episode_filter_mode = false;
+                // Trigger preview reload when returning to Search or Home
+                if target == Screen::Search {
+                    self.needs_preview_load = true;
+                } else if target == Screen::Home {
+                    self.needs_continue_watching_refresh = true;
+                }
             }
             KeyCode::Up => {
                 // Move up one row (subtract columns)
@@ -1291,9 +1412,12 @@ impl App {
                 self.episode_filter_mode = true;
             }
             KeyCode::Enter => {
-                // Play selected episode
                 if self.episode_selected_index < total_episodes {
-                    if let Some(anime) = self.selected_anime.as_ref().map(|a| a.base.clone()) {
+                    let anime = self.selected_anime.as_ref()
+                        .map(|a| a.base.clone())
+                        .or_else(|| self.player_controller.current_anime().cloned());
+                    
+                    if let Some(anime) = anime {
                         self.player_controller.start_playback(
                             anime,
                             self.episodes.clone(),
@@ -1314,7 +1438,7 @@ impl App {
         key: KeyCode,
     ) -> Result<()> {
         if key == KeyCode::Enter || key == KeyCode::Esc {
-            self.current_screen = Screen::SourceSelect;
+            self.current_screen = Screen::Home;
         }
         Ok(())
     }
@@ -1338,7 +1462,6 @@ impl App {
                 }
             }
             KeyCode::Enter => {
-                // Set source based on selection and go home
                 let new_source = if self.selected_source_idx == 0 {
                     Language::English
                 } else {
@@ -1348,7 +1471,19 @@ impl App {
                     tracing::info!("Source changed from {:?} to {:?}", self.selected_source, new_source);
                     self.selected_source = new_source;
                 }
-                self.current_screen = Screen::Home;
+                // Clear any existing images before transitioning
+                if self.image_renderer.requires_terminal_clear() {
+                    let _ = self.image_renderer.clear_terminal_graphics();
+                }
+                self.current_image_data = None;
+                self.current_anime_id = None;
+                self.previous_image_data = None;
+                self.in_transition = false;
+                self.image_renderer.clear_cache();
+                self.last_preview_anime_id = None;
+                // After selecting source, go to Search screen
+                self.current_screen = Screen::Search;
+                self.needs_preview_load = true;
             }
             _ => {}
         }
@@ -1673,7 +1808,6 @@ impl App {
                 }
             }
             KeyCode::Enter => {
-                // Select the current anime and go to episode list
                 if let Some(anime) = self.enriched_results.get(self.selected_index).cloned() {
                     self.selected_anime = Some(anime.clone());
                     self.select_anime(anime.base).await?;
@@ -1688,26 +1822,39 @@ impl App {
         &mut self,
         key: KeyCode,
     ) -> Result<()> {
+        let total_episodes = self.episodes.len();
+        let available_width = 60usize;
+        let cell_width = 11usize;
+        let cell_spacing = 4usize;
+        let cols = ((available_width.saturating_sub(4)) / (cell_width + cell_spacing)).max(1);
+        
         match key {
             KeyCode::Esc => {
                 self.show_episode_list = false;
             }
             KeyCode::Up => {
-                if self.episode_list_scroll > 0 {
-                    self.episode_list_scroll -= 1;
+                if self.episode_list_selected >= cols {
+                    self.episode_list_selected -= cols;
                 }
             }
             KeyCode::Down => {
-                let visible = 20; // Approximate visible count
-                if self.episode_list_scroll + visible < self.episodes.len() {
-                    self.episode_list_scroll += 1;
+                if self.episode_list_selected + cols < total_episodes {
+                    self.episode_list_selected += cols;
+                }
+            }
+            KeyCode::Left => {
+                if self.episode_list_selected > 0 {
+                    self.episode_list_selected -= 1;
+                }
+            }
+            KeyCode::Right => {
+                if self.episode_list_selected < total_episodes.saturating_sub(1) {
+                    self.episode_list_selected += 1;
                 }
             }
             KeyCode::Enter => {
-                // Play selected episode
-                let selected = self.episode_list_scroll;
-                if selected < self.episodes.len() {
-                    self.player_controller.select_episode(selected);
+                if self.episode_list_selected < total_episodes {
+                    self.player_controller.select_episode(self.episode_list_selected);
                     self.play_current_episode().await;
                 }
                 self.show_episode_list = false;
@@ -1756,8 +1903,21 @@ impl App {
                         }
                     }
                     KeyCode::Char('e') => {
-                        self.show_episode_list = true;
-                        self.episode_list_scroll = self.player_controller.current_episode_idx();
+                        self.previous_screen = Some(Screen::Player);
+                        self.episode_selected_index = self.player_controller.current_episode_idx();
+                        self.episode_current_page = self.episode_selected_index / self.episodes_per_page;
+                        
+                        if self.episodes.is_empty() {
+                            if let Some((anime, episodes)) = self.player_controller.current_anime_and_episodes() {
+                                self.selected_anime = Some(crate::metadata::EnrichedAnime {
+                                    base: anime,
+                                    metadata: None,
+                                });
+                                self.episodes = episodes;
+                            }
+                        }
+                        
+                        self.current_screen = Screen::EpisodeSelect;
                     }
                     _ => {}
                 }
@@ -1796,6 +1956,7 @@ impl App {
     ) -> Result<()> {
         match key {
             KeyCode::Esc => {
+                self.source_modal_for_search = false;
                 self.show_source_modal = false;
             }
             KeyCode::Up => {
@@ -1809,7 +1970,6 @@ impl App {
                 }
             }
             KeyCode::Enter => {
-                // Set source based on selection and close modal
                 let new_source = if self.selected_source_idx == 0 {
                     Language::English
                 } else {
@@ -1820,8 +1980,10 @@ impl App {
                     self.selected_source = new_source;
                 }
                 self.show_source_modal = false;
-                // Re-run search with new source
-                if !self.search_overlay.query.is_empty() {
+                self.source_modal_for_search = false;
+                
+                // If on Search screen, refresh results
+                if self.current_screen == Screen::Search && !self.search_overlay.query.is_empty() {
                     self.perform_search().await;
                 }
             }
@@ -1838,14 +2000,27 @@ impl App {
                     self.play_current_episode().await;
                 }
             }
-            ControlAction::PreviousEpisode => {
+ControlAction::PreviousEpisode => {
                 if self.player_controller.play_previous_episode() {
                     self.play_current_episode().await;
                 }
             }
             ControlAction::ChooseEpisode => {
-                self.show_episode_list = true;
-                self.episode_list_scroll = self.player_controller.current_episode_idx();
+                self.previous_screen = Some(Screen::Player);
+                self.episode_selected_index = self.player_controller.current_episode_idx();
+                self.episode_current_page = self.episode_selected_index / self.episodes_per_page;
+                
+                if self.episodes.is_empty() {
+                    if let Some((anime, episodes)) = self.player_controller.current_anime_and_episodes() {
+                        self.selected_anime = Some(crate::metadata::EnrichedAnime {
+                            base: anime,
+                            metadata: None,
+                        });
+                        self.episodes = episodes;
+                    }
+                }
+                
+                self.current_screen = Screen::EpisodeSelect;
             }
             ControlAction::BackToMenu => {
                 self.current_screen = Screen::Home;
@@ -2028,9 +2203,9 @@ impl App {
         Ok(())
     }
 
-    async fn play_current_episode(&mut self,
-    ) {
-        // Get episode and anime data first, then clone to avoid borrow issues
+    async fn play_current_episode(&mut self) {
+        self.player_controller.show_controls();
+        
         let episode = if let Some(ep) = self.player_controller.current_episode() {
             ep.clone()
         } else {
@@ -2115,37 +2290,59 @@ impl App {
     async fn on_tick(
         &mut self,
     ) -> Result<()> {
-        // Update splash screen
         if self.current_screen == Screen::Splash {
             self.splash_screen.tick();
             let elapsed = self.splash_start.elapsed().as_millis() as u64;
-            let min_splash_time = 800; // Minimum 0.8 seconds - faster loading
-            let max_splash_time = 5000; // Maximum 5 seconds timeout
+            let splash_duration = 2000;
+            let max_splash_time = 5000;
             
-            // Check if minimum time has passed
-            if elapsed >= min_splash_time {
-                // Check if first image is loaded (if we have continue watching items)
-                let first_image_ready = if !self.continue_watching.is_empty() {
+            // Fast progress: reach 90% at 1200ms, then hold until 2000ms
+            let progress = if elapsed < 1200 {
+                ((elapsed * 90) / 1200).min(90) as u8
+            } else if elapsed < 1800 {
+                90
+            } else {
+                100
+            };
+            
+            if elapsed < 300 {
+                self.splash_screen.set_progress(progress, "Initializing...");
+            } else if elapsed < 600 {
+                self.splash_screen.set_progress(progress, "Loading images...");
+                if self.current_image_data.is_none() && !self.continue_watching.is_empty() {
                     if let Some(first) = self.continue_watching.first() {
-                        let first_id = format!("continue_watching_{}", first.anime_id);
-                        // Try to get from pipeline cache
-                        self.image_pipeline.get_image(&first_id).await.is_some()
-                    } else {
-                        true
-                    }
-                } else {
-                    true
-                };
-                
-                // Transition if: minimum time passed AND (first image ready OR timeout reached)
-                if first_image_ready || elapsed >= max_splash_time {
-                    self.current_screen = Screen::SourceSelect;
-                    // Start metadata loading in background after splash
-                    if !self.continue_watching.is_empty() && self.continue_watching_metadata.is_empty() {
-                        self.load_metadata_in_background().await;
+                        if !first.cover_url.is_empty() {
+                            let image_id = format!("continue_watching_{}", first.anime_id);
+                            if let Ok(data) = self.image_pipeline.request_download(image_id, first.cover_url.clone()).await {
+                                self.current_image_data = Some(data);
+                            }
+                        }
                     }
                 }
+            } else if elapsed < 900 {
+                self.splash_screen.set_progress(progress, "Caching images...");
+                for history in self.continue_watching.iter().skip(1).take(3) {
+                    if !history.cover_url.is_empty() {
+                        let image_id = format!("continue_watching_{}", history.anime_id);
+                        let _ = self.image_pipeline.request_download(image_id, history.cover_url.clone()).await;
+                    }
+                }
+            } else if elapsed < 1200 {
+                self.splash_screen.set_progress(progress, "Loading metadata...");
+                if self.continue_watching_metadata.is_empty() {
+                    self.load_metadata_in_background().await;
+                }
+            } else if elapsed < 1800 {
+                self.splash_screen.set_progress(90, "Finalizing...");
+            } else {
+                self.splash_screen.set_progress(100, "Ready!");
             }
+            
+            // Transition to Home after exactly 2 seconds (or max timeout)
+            if elapsed >= splash_duration || elapsed >= max_splash_time {
+                self.current_screen = Screen::Home;
+            }
+            
             return Ok(());
         }
 
@@ -2171,6 +2368,22 @@ impl App {
         // Check mpv status
         if self.current_screen == Screen::Player {
             self.player_controller.check_mpv_status();
+        }
+
+        // Refresh continue watching list when returning to Home
+        if self.needs_continue_watching_refresh && self.current_screen == Screen::Home {
+            self.needs_continue_watching_refresh = false;
+            // Reload continue watching from database
+            if let Ok(updated_list) = self.db.get_continue_watching(10).await {
+                self.continue_watching = updated_list;
+                // Reset selection if out of bounds
+                if self.continue_watching_selected >= self.continue_watching.len() && !self.continue_watching.is_empty() {
+                    self.continue_watching_selected = 0;
+                }
+                // Clear current image to force reload
+                self.current_image_data = None;
+                self.current_anime_id = None;
+            }
         }
 
         // Load initial image for Continue Watching when entering Home screen

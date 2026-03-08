@@ -1,3 +1,4 @@
+use super::ascii_art::AsciiArt;
 use super::components::LoadingSpinner;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -10,7 +11,8 @@ use ratatui::{
 pub struct SplashScreen {
     frame_count: usize,
     loading_spinner: LoadingSpinner,
-    loading_progress: u8, // 0-100
+    loading_progress: u8,
+    load_status: String,
 }
 
 impl SplashScreen {
@@ -19,79 +21,73 @@ impl SplashScreen {
             frame_count: 0,
             loading_spinner: LoadingSpinner::new(),
             loading_progress: 0,
+            load_status: "Initializing...".to_string(),
         }
     }
 
     pub fn tick(&mut self) {
         self.frame_count += 1;
         self.loading_spinner.tick();
-        // Simulate loading progress - much faster (13% per tick for 800ms total)
-        if self.loading_progress < 100 {
-            self.loading_progress = (self.loading_progress + 13).min(100);
-        }
+    }
+
+    pub fn set_progress(&mut self, progress: u8, status: &str) {
+        self.loading_progress = progress.min(100);
+        self.load_status = status.to_string();
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Percentage(30),
-                Constraint::Length(3),
+                Constraint::Percentage(25),
+                Constraint::Length(12),
                 Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Min(0),
+                Constraint::Length(2),
+                Constraint::Length(2),
+                Constraint::Percentage(25),
             ])
             .split(area);
 
-        let fade_progress = (self.frame_count as f32 / 20.0).min(1.0);
+        let banner_lines = AsciiArt::render_banner_colored();
+        let banner_text = Text::from(banner_lines);
+        let banner = Paragraph::new(banner_text).alignment(Alignment::Center);
+        frame.render_widget(banner, chunks[1]);
 
-        let pink = (255.0 * fade_progress) as u8;
-        let purple = (150.0 * fade_progress) as u8;
-        let blue = (200.0 * fade_progress) as u8;
-
-        let title_color = Color::Rgb(pink, 50, purple + 50);
-        let accent_color = Color::Rgb(blue, 100, 255);
-
-        let title_style = Style::default()
-            .fg(title_color)
-            .add_modifier(Modifier::BOLD);
-
-        let title_text = Paragraph::new("ANI-TUI")
-            .alignment(Alignment::Center)
-            .style(title_style);
-        frame.render_widget(title_text, chunks[1]);
-
-        let version_style = Style::default()
-            .fg(accent_color)
-            .add_modifier(Modifier::DIM);
-
-        let version_text = Paragraph::new("v3.6.1")
+        let version_style = Style::default().fg(Color::DarkGray);
+        let version_text = Paragraph::new("v3.6.1 • Terminal UI for Anime Streaming")
             .alignment(Alignment::Center)
             .style(version_style);
         frame.render_widget(version_text, chunks[2]);
 
-        let bar_width = 30;
-        let filled = (self.loading_progress as usize * bar_width) / 100;
-        let empty = bar_width - filled;
-        let bar_text = format!("[{}{}]", "▓".repeat(filled), "░".repeat(empty));
-        let bar_color = self.get_loading_bar_color();
-        let loading_bar = Paragraph::new(bar_text)
+        let spinner = AsciiArt::loading_spinner(self.frame_count);
+        let status_text = format!("{} {}", spinner, self.load_status);
+        let status = Paragraph::new(status_text)
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::Cyan));
+        frame.render_widget(status, chunks[3]);
+
+        let bar = Self::render_progress_bar(self.loading_progress, 50);
+        let bar_color = if self.loading_progress < 30 {
+            Color::Yellow
+        } else if self.loading_progress < 70 {
+            Color::Cyan
+        } else {
+            Color::Green
+        };
+        let loading_bar = Paragraph::new(bar)
             .alignment(Alignment::Center)
             .style(Style::default().fg(bar_color));
         frame.render_widget(loading_bar, chunks[4]);
     }
 
-    fn get_loading_bar_color(&self) -> Color {
-        let progress = self.loading_progress as f32 / 100.0;
-        let r = (100.0 + 155.0 * progress) as u8;
-        let g = (50.0 + 100.0 * progress) as u8;
-        let b = (200.0 + 55.0 * progress) as u8;
-        Color::Rgb(r, g, b)
+    fn render_progress_bar(progress: u8, width: usize) -> String {
+        let filled = (progress as usize * width) / 100;
+        let empty = width - filled;
+        format!("┃{}{}┃", "█".repeat(filled), "░".repeat(empty))
     }
 
     pub fn is_complete(&self, elapsed_ms: u64) -> bool {
-        elapsed_ms > 800 // Show for 0.8 seconds - faster loading
+        elapsed_ms > 1500 || self.loading_progress >= 100
     }
 }
 
@@ -107,11 +103,11 @@ impl PreviewPanel {
         let block = Block::default().borders(Borders::ALL).title("Preview");
 
         if let Some(anime) = anime {
+            let inner_area = block.inner(area);
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Percentage(60), Constraint::Percentage(40)]) // Balanced layout
-                .margin(0) // No margin for full-size images
-                .split(area);
+                .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+                .split(inner_area);
 
             // Check if we switched to a different anime
             let current_anime_id = Some(anime.base.id.clone());
@@ -238,11 +234,9 @@ impl PreviewPanel {
             let info_block = Block::default().borders(Borders::TOP);
             let paragraph = Paragraph::new(Text::from(lines))
                 .block(info_block)
-                .wrap(Wrap { trim: true });
+                .wrap(Wrap { trim: false });
 
             frame.render_widget(paragraph, chunks[1]);
-
-            // Render outer block
             frame.render_widget(block, area);
         } else {
             let paragraph = Paragraph::new("Select an anime to see details")
@@ -369,11 +363,9 @@ impl SearchOverlay {
         let search_input = Paragraph::new(search_text).block(search_block);
         frame.render_widget(search_input, layout[1]);
 
-        // Results list
-        let results_block = Block::default().borders(Borders::ALL).title(format!(
-            "Results ({}) - Shift+C: change source | ESC: back home",
-            self.results.len()
-        ));
+        let results_block = Block::default()
+            .borders(Borders::ALL)
+            .title(format!("Results ({})", self.results.len()));
 
         let mut lines: Vec<Line> = Vec::new();
 
@@ -427,51 +419,34 @@ pub struct SourceSelectModal;
 impl SourceSelectModal {
     pub fn render(
         frame: &mut Frame,
-        area: Rect,
-        sources: &[(String, crate::providers::Language, bool)], // (name, lang, enabled)
+        frame_area: Rect,
+        sources: &[(String, crate::providers::Language, bool)],
         selected: usize,
     ) {
-        // Create centered layout - 50% width, 40% height
-        let vertical_layout = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Percentage(30),
-                Constraint::Percentage(40),
-                Constraint::Percentage(30),
-            ])
-            .split(area);
+        frame.render_widget(ratatui::widgets::Clear, frame_area);
 
-        let horizontal_layout = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(25),
-                Constraint::Percentage(50),
-                Constraint::Percentage(25),
-            ])
-            .split(vertical_layout[1]);
+        let content_height = (sources.len() + 3) as u16;
+        let modal_height = content_height.min(frame_area.height.saturating_sub(4));
+        let modal_width = ((frame_area.width as f32 * 0.4).min(50.0).max(40.0)) as u16;
 
-        let modal_area = horizontal_layout[1];
+        let modal_area = Rect {
+            x: frame_area.x + (frame_area.width.saturating_sub(modal_width)) / 2,
+            y: frame_area.y + (frame_area.height.saturating_sub(modal_height)) / 2,
+            width: modal_width,
+            height: modal_height,
+        };
 
-        // Clear the area behind the modal
-        frame.render_widget(ratatui::widgets::Clear, modal_area);
-
-        // Block with centered title
         let block = Block::default()
             .borders(Borders::ALL)
             .title("Select Source (Enter to confirm)");
 
-        // Split modal area for caption and content
+        let inner_area = block.inner(modal_area);
         let modal_chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(2), // Caption
-                Constraint::Min(0),    // Content
-            ])
-            .margin(1)
-            .split(modal_area);
+            .constraints([Constraint::Length(2), Constraint::Min(0)])
+            .split(inner_area);
 
-        // Caption centered at top
-        let caption = Paragraph::new("Select ONE subtitle language:")
+        let caption = Paragraph::new("Select subtitle language:")
             .alignment(Alignment::Center)
             .style(
                 Style::default()
@@ -484,9 +459,7 @@ impl SourceSelectModal {
 
         for (idx, (name, lang, enabled)) in sources.iter().enumerate() {
             let is_selected = idx == selected;
-
             let prefix = if is_selected { "> " } else { "  " };
-            // Radio button: filled circle if enabled, empty circle if not
             let radio = if *enabled { "(◉)" } else { "(○)" };
 
             let lang_badge = match lang {
@@ -514,14 +487,13 @@ impl SourceSelectModal {
 
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "Only one source can be active at a time",
+            "Only one source can be active",
             Style::default().fg(Color::Gray),
         )));
 
-        let paragraph = Paragraph::new(Text::from(lines))
-            .block(block)
-            .alignment(Alignment::Center);
+        let paragraph = Paragraph::new(Text::from(lines)).alignment(Alignment::Center);
 
         frame.render_widget(paragraph, modal_chunks[1]);
+        frame.render_widget(block, modal_area);
     }
 }

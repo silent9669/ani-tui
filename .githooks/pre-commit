@@ -1,0 +1,58 @@
+#!/bin/bash
+#
+# Pre-commit hook to detect changes to image_renderer.rs
+# and prompt developer to update IMAGE_RENDERING.md documentation
+#
+
+set -e
+
+# Colors for output
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Check if image_renderer.rs is staged for commit
+if git diff --cached --name-only | grep -q "src/ui/image_renderer.rs"; then
+    echo ""
+    echo -e "${YELLOW}⚠️  WARNING: Image rendering code has been modified${NC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo -e "${BLUE}The following changes were detected in image_renderer.rs:${NC}"
+    echo ""
+    
+    # Show summary of changes
+    git diff --cached --stat src/ui/image_renderer.rs | head -5
+    
+    echo ""
+    echo -e "${YELLOW}📋 ACTION REQUIRED:${NC}"
+    echo ""
+    echo "Since image rendering is a critical and complex component,"
+    echo "please update the documentation to track this change."
+    echo ""
+    echo -e "${GREEN}Run the following command to update docs:${NC}"
+    echo ""
+    echo "    ./scripts/update-image-docs.sh"
+    echo ""
+    echo -e "${BLUE}Or manually edit:${NC} docs/IMAGE_RENDERING.md"
+    echo ""
+    echo -e "${YELLOW}Add a changelog entry under the 'Pending Changes' section with:${NC}"
+    echo "  - Date of change"
+    echo "  - Brief description of what changed"
+    echo "  - Why it was changed"
+    echo "  - Any related issue numbers"
+    echo ""
+    
+    # Show recent changelog entries as examples
+    echo -e "${BLUE}Recent changelog entries for reference:${NC}"
+    grep -A 5 "### v3.7.0" docs/IMAGE_RENDERING.md 2>/dev/null | head -10 || echo "  (See docs/IMAGE_RENDERING.md for examples)"
+    echo ""
+    
+    # Non-blocking: allow commit to proceed
+    echo -e "${GREEN}✓ Commit will proceed. Please update docs when convenient.${NC}"
+    echo ""
+fi
+
+# Always exit 0 to allow the commit
+exit 0

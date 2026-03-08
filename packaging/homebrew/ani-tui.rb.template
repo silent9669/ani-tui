@@ -1,0 +1,36 @@
+class AniTui < Formula
+  desc "Netflix-inspired TUI for anime streaming"
+  homepage "https://github.com/silent9669/ani-tui"
+  url "https://github.com/silent9669/ani-tui/archive/refs/tags/v<%= version %>.tar.gz"
+  sha256 "<%= sha256 %>"
+  license "MIT"
+  head "https://github.com/silent9669/ani-tui.git", branch: "main"
+
+  livecheck do
+    url :stable
+    regex(/^v?(\d+(?:\.\d+)+)$/i)
+  end
+
+  depends_on "rust" => :build
+  depends_on "pkgconf" => :build
+  depends_on "chafa"
+  depends_on "mpv"
+
+  on_linux do
+    depends_on "openssl@3"
+  end
+
+  def install
+    system "cargo", "install", *std_cargo_args
+  end
+
+  test do
+    output = shell_output("#{bin}/ani-tui --help")
+    assert_match "ani-tui", output
+    assert_match "Usage", output
+    assert_match "Options", output
+
+    version_output = shell_output("#{bin}/ani-tui --version")
+    assert_match version.to_s, version_output
+  end
+end

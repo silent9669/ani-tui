@@ -25,6 +25,17 @@ jobs:
       with:
         targets: ${{ matrix.target }}
     
+    - name: Cache cargo registry and build
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-${{ matrix.target }}-cargo-
+    
     - name: Build
       run: cargo build --release --target ${{ matrix.target }}
     
@@ -46,6 +57,17 @@ jobs:
     
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
+    
+    - name: Cache cargo registry and build
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-windows-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-windows-cargo-
     
     - name: Build
       run: cargo build --release
@@ -71,6 +93,17 @@ jobs:
     
     - name: Install dependencies
       run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+    
+    - name: Cache cargo registry and build
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-linux-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-linux-cargo-
     
     - name: Build
       run: cargo build --release
@@ -150,34 +183,38 @@ jobs:
 
   update-homebrew:
     needs: release
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
+    - name: Checkout ani-tui
+      uses: actions/checkout@v4
+
     - name: Checkout homebrew-tap
       uses: actions/checkout@v4
       with:
         repository: silent9669/homebrew-tap
         token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         path: homebrew-tap
-    
-    - name: Download source archive
+
+    - name: Setup Ruby
+      uses: ruby/setup-ruby@v1
+      with:
+        ruby-version: '3.3'
+
+    - name: Generate Homebrew formula
       run: |
         VERSION=${GITHUB_REF#refs/tags/}
-        curl -L -o ani-tui-source.tar.gz "https://github.com/silent9669/ani-tui/archive/refs/tags/${VERSION}.tar.gz"
-    
-    - name: Calculate SHA256
-      id: sha
+        ruby scripts/generate-homebrew-formula.rb "$VERSION" homebrew-tap/Formula/ani-tui.rb
+
+    - name: Validate with brew audit
       run: |
-        SHA256=$(sha256sum ani-tui-source.tar.gz | awk '{print $1}')
-        echo "sha256=$SHA256" >> $GITHUB_OUTPUT
-    
-    - name: Update Homebrew formula
+        brew audit --strict --online homebrew-tap/Formula/ani-tui.rb
+
+    - name: Test formula installation
       run: |
-        VERSION=${GITHUB_REF#refs/tags/v}
-        SHA256=${{ steps.sha.outputs.sha256 }}
-        mkdir -p homebrew-tap/Formula
-        printf '%s\n' "class AniTui < Formula" "  desc \"Netflix-inspired TUI for anime streaming\"" "  homepage \"https://github.com/silent9669/ani-tui\"" "  url \"https://github.com/silent9669/ani-tui/archive/refs/tags/v${VERSION}.tar.gz\"" "  sha256 \"${SHA256}\"" "  license \"MIT\"" "  head \"https://github.com/silent9669/ani-tui.git\", branch: \"main\"" "" "  depends_on \"rust\" => :build" "  depends_on \"chafa\"" "  depends_on \"mpv\"" "" "  def install" "    system \"cargo\", \"install\", *std_cargo_args" "  end" "" "  test do" "    system \"#{bin}/ani-tui\", \"--version\"" "  end" "end" > homebrew-tap/Formula/ani-tui.rb
-    
+        brew install --build-from-source homebrew-tap/Formula/ani-tui.rb
+        brew test ani-tui
+
     - name: Commit and push to homebrew-tap
       run: |
         cd homebrew-tap

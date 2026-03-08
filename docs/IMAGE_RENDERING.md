@@ -62,8 +62,19 @@ Cross-platform image preview for ani-tui using multiple terminal graphics protoc
 ### Issue: Flickering
 
 **Symptom:** Image flashes when updating  
-**Status:** Acknowledged - requires frame rate limiting  
-**Note:** User requested not to fix yet due to complexity
+**Status:** FIXED in v3.7.0  
+**Solution:** Implemented 30fps frame rate limiting with `MIN_RENDER_INTERVAL_MS = 33ms`
+
+**Root Cause:** TUI redraws at ~100ms tick rate but image render had no throttle. iTerm2 protocol was clearing+redrawing area every frame even when image unchanged.
+
+**Implementation:**
+- Added `last_render_time: Instant` field to ImageRenderer
+- Check `elapsed < MIN_RENDER_INTERVAL_MS` before rendering
+- Skip render if too soon (unless first render)
+- Secondary throttle in App's `render_image_with_ratatui()` method
+- Reset timer in `clear_cache()` to allow immediate render after cache clear
+
+**Result:** Warp terminal no longer flashes; image updates feel smooth even during rapid navigation
 
 ## Implementation Details
 
@@ -150,6 +161,32 @@ Options researched:
 - Verify 30% size increase is applied correctly
 
 ## Changelog
+
+### Pending Changes
+
+When modifying `src/ui/image_renderer.rs`, please document changes here before committing.
+Use the helper script: `./scripts/update-image-docs.sh`
+
+**Template:**
+```
+### vX.Y.Z (YYYY-MM-DD)
+
+- [Brief description of change]
+  - What: [technical details]
+  - Why: [reason/motivation]
+  - Impact: [user-visible effects]
+```
+
+### v3.7.0
+
+- Implemented 30fps frame rate limiting to reduce flickering on all terminals
+- Added `MIN_RENDER_INTERVAL_MS` constant (33ms) to throttle image renders
+- Added `last_render_time` tracking in ImageRenderer for rate limiting
+- Added secondary throttle in App's `render_image_with_ratatui()` method
+- Optimized render path to skip unnecessary redraws when image hasn't changed
+- Fixed Warp terminal flashy rendering issues through frame rate capping
+- Updated `clear_cache()` to reset `last_render_time` for immediate next render
+- Improved iTerm2 protocol stability on macOS terminals (Warp, iTerm2)
 
 ### v3.5.0
 

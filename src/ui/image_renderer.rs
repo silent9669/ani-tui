@@ -9,8 +9,10 @@ use ratatui::{
 };
 use std::io::{self, Write};
 use std::process::{Command, Stdio};
+use std::time::Instant;
 
-/// Supported image rendering protocols
+const MIN_RENDER_INTERVAL_MS: u128 = 33;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Protocol {
     /// Kitty graphics protocol (best quality - Warp, Kitty, Ghostty, WezTerm)
@@ -164,15 +166,14 @@ impl ImageError {
     }
 }
 
-/// Image renderer that auto-detects terminal capabilities
 pub struct ImageRenderer {
     protocol: Protocol,
     sixel_cache: Option<Vec<u8>>,
     last_kitty_image_id: Option<u32>,
-    // State tracking to prevent re-rendering
     last_rendered_hash: Option<u64>,
     last_rendered_area: Option<Rect>,
     last_image_data: Option<Vec<u8>>,
+    last_render_time: Instant,
 }
 
 impl ImageRenderer {
@@ -188,6 +189,7 @@ impl ImageRenderer {
             last_rendered_hash: None,
             last_rendered_area: None,
             last_image_data: None,
+            last_render_time: Instant::now(),
         }
     }
 
@@ -330,35 +332,36 @@ impl ImageRenderer {
             ));
         }
 
-        // Check terminal size
         if area.width < 10 || area.height < 5 {
             return Err(ImageError::TerminalTooSmall);
         }
 
-        // Calculate hash of current image data
+        let elapsed = self.last_render_time.elapsed().as_millis();
+        if elapsed < MIN_RENDER_INTERVAL_MS {
+            if self.last_rendered_hash.is_some() {
+                tracing::debug!(
+                    "Skipping render - too soon ({}ms < {}ms)",
+                    elapsed,
+                    MIN_RENDER_INTERVAL_MS
+                );
+                return Ok(None);
+            }
+        }
+
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
         let mut hasher = DefaultHasher::new();
         image_data.hash(&mut hasher);
         let current_hash = hasher.finish();
 
-        // Check if we need to render (first time or image/area changed)
-        // Note: iTerm2 and Sixel protocols don't persist across TUI redraws
-        // Kitty protocol persists in terminal memory, so we can skip re-renders
         let should_render = match self.protocol {
-            Protocol::Iterm2 | Protocol::Sixel => {
-                // iTerm2 and Sixel images disappear on screen clear, always re-render
-                true
-            }
-            _ => {
-                // For Kitty, check if we already rendered this image
-                match (&self.last_rendered_hash, &self.last_rendered_area) {
-                    (Some(last_hash), Some(last_area)) => {
-                        *last_hash != current_hash || *last_area != area
-                    }
-                    _ => true, // First time rendering
+            Protocol::Iterm2 | Protocol::Sixel => true,
+            _ => match (&self.last_rendered_hash, &self.last_rendered_area) {
+                (Some(last_hash), Some(last_area)) => {
+                    *last_hash != current_hash || *last_area != area
                 }
-            }
+                _ => true,
+            },
         };
 
         if !should_render {
@@ -388,11 +391,11 @@ impl ImageRenderer {
             }
         };
 
-        // Update state tracking on successful render
         if result.is_ok() {
             self.last_rendered_hash = Some(current_hash);
             self.last_rendered_area = Some(area);
             self.last_image_data = Some(image_data.to_vec());
+            self.last_render_time = Instant::now();
             tracing::debug!("Image rendered successfully, state updated");
         }
 
@@ -518,23 +521,21 @@ impl ImageRenderer {
         Ok(())
     }
 
-    /// Clear the image area by filling with spaces
-    /// Render using iTerm2 inline images protocol
-    /// Optimized for Warp terminal compatibility
     fn render_iterm2(&self, image_data: &[u8], area: Rect) -> Result<(), ImageError> {
-        // Margin from all sides for consistent spacing
         const MARGIN: u16 = 3;
-        // Size increase factor (1.3 = 30% bigger)
         const SIZE_INCREASE: f32 = 1.9;
 
-        // Get image dimensions
-        let (img_width, img_height) = self.get_image_dimensions(image_data)?;
+        if let Some(ref last_data) = self.last_image_data {
+            if last_data == image_data && self.last_rendered_area == Some(area) {
+                tracing::debug!("Skipping iTerm2 render - same image and area");
+                return Ok(());
+            }
+        }
 
-        // Calculate available space after margins
+        let (img_width, img_height) = self.get_image_dimensions(image_data)?;
         let available_width = area.width.saturating_sub(MARGIN * 2);
         let available_height = area.height.saturating_sub(MARGIN * 2);
 
-        // Calculate base display size within available space
         let (base_cols, base_rows) = self.calculate_display_size(
             img_width,
             img_height,
@@ -542,32 +543,21 @@ impl ImageRenderer {
             available_height as u32,
         );
 
-        // Increase size by 90%
         let display_cols = ((base_cols as f32) * SIZE_INCREASE) as u32;
         let display_rows = ((base_rows as f32) * SIZE_INCREASE) as u32;
-
-        // Cap at available space (respect margins)
         let display_cols = display_cols.min(available_width as u32);
         let display_rows = display_rows.min(available_height as u32);
 
-        // Standard terminal cell size: 8x16 pixels
         let cell_width = 8u32;
         let cell_height = 16u32;
         let display_width_px = display_cols * cell_width;
         let display_height_px = display_rows * cell_height;
 
-        // Position with margin from top/left, centered in remaining space
         let start_x = area.x + MARGIN + (available_width - display_cols as u16) / 2;
         let start_y = area.y + MARGIN + (available_height - display_rows as u16) / 2;
 
         let base64_data = general_purpose::STANDARD.encode(image_data);
 
-        // iTerm2 OSC 1337 format with all necessary parameters
-        // inline=1: display inline
-        // size: file size for integrity checking
-        // width/height: dimensions in pixels
-        // preserveAspectRatio=1: maintain aspect ratio
-        // doNotMoveCursor=1: don't advance cursor after image
         let osc = format!(
             "\x1b]1337;File=inline=1;size={};width={}px;height={}px;preserveAspectRatio=1;doNotMoveCursor=1:{}\x07",
             image_data.len(),
@@ -579,8 +569,6 @@ impl ImageRenderer {
         let stdout = io::stdout();
         let mut handle = stdout.lock();
 
-        // CRITICAL FIX: Clear the image area efficiently to prevent stacking
-        // Use a single buffer for all spaces to reduce syscalls
         let spaces = vec![b' '; area.width as usize];
         for row in area.y..area.y + area.height {
             queue!(handle, MoveTo(area.x, row)).map_err(|e| {
@@ -591,12 +579,10 @@ impl ImageRenderer {
                 .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
         }
 
-        // Single flush after all clearing
         handle
             .flush()
             .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
 
-        // Position cursor at the calculated center position for the new image
         queue!(handle, MoveTo(start_x, start_y))
             .map_err(|e| ImageError::RenderFailed(format!("Failed to position cursor: {}", e)))?;
 
@@ -769,6 +755,7 @@ impl ImageRenderer {
         self.last_rendered_hash = None;
         self.last_rendered_area = None;
         self.last_image_data = None;
+        self.last_render_time = Instant::now();
         tracing::debug!("Image renderer cache cleared");
     }
 

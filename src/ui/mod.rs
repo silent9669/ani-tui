@@ -1,4 +1,5 @@
 pub mod app;
+pub mod ascii_art;
 pub mod components;
 pub mod image_display;
 pub mod image_renderer;
