@@ -74,16 +74,23 @@ jobs:
       run: cargo build --release
     
     - name: Package
+      shell: pwsh
       run: |
-        cd target/release
-        if (Test-Path ani-tui-windows-x86_64.zip) { Remove-Item ani-tui-windows-x86_64.zip -Force }
-        Compress-Archive -Path ani-tui.exe -DestinationPath ani-tui-windows-x86_64.zip -Force
+        $zipPath = "target/release/ani-tui-windows-x86_64.zip"
+        if (Test-Path $zipPath) { 
+          Write-Host "Removing existing archive: $zipPath"
+          Remove-Item $zipPath -Force 
+        }
+        Compress-Archive -Path "target/release/ani-tui.exe" -DestinationPath $zipPath -Force
+        Write-Host "Archive created successfully: $zipPath"
+        Get-ChildItem $zipPath
     
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: ani-tui-windows-x86_64
         path: target/release/ani-tui-windows-x86_64.zip
+        if-no-files-found: error
 
   build-linux:
     runs-on: ubuntu-latest
