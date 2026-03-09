@@ -32,7 +32,8 @@ IO.popen(['ruby', '-c'], 'r+') do |io|
   io.write(formula)
   io.close_write
   result = io.read
-  unless result.empty?
+  # Ruby -c outputs "Syntax OK" on success, error message on failure
+  unless result.include?("Syntax OK")
     puts "Ruby syntax error:"
     puts result
     exit 1
