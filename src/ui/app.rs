@@ -879,7 +879,7 @@ impl App {
 
         // Calculate pagination
         let total_episodes = filtered_episodes.len();
-        let total_pages = (total_episodes + self.episodes_per_page - 1) / self.episodes_per_page;
+        let total_pages = total_episodes.div_ceil(self.episodes_per_page);
         let current_page = self.episode_current_page.min(total_pages.saturating_sub(1));
         let page_start = current_page * self.episodes_per_page;
         let page_end = (page_start + self.episodes_per_page).min(total_episodes);
@@ -967,9 +967,7 @@ impl App {
         let max_visible_rows = available_height.saturating_sub(2);
 
         // Dynamically calculate number of columns based on available width
-        let cols = ((available_width - 4) / (cell_width + cell_spacing))
-            .max(1)
-            .min(10);
+        let cols = ((available_width - 4) / (cell_width + cell_spacing)).clamp(1, 10);
 
         // Build grid lines - center the grid with selected episode in the middle
         let mut grid_lines: Vec<Line> = Vec::new();
@@ -978,7 +976,7 @@ impl App {
         let left_padding = ((available_width.saturating_sub(total_grid_width)) / 2) + 15;
 
         let max_rows = max_visible_rows;
-        let total_rows = (page_episodes.len() + cols - 1) / cols;
+        let total_rows = page_episodes.len().div_ceil(cols);
         let rows_to_show = total_rows.min(max_rows);
 
         // Calculate vertical padding to center the grid
@@ -1092,7 +1090,7 @@ impl App {
     fn draw_control_overlay(&self, frame: &mut Frame, area: Rect) {
         // Control items: Previous, Next, Choose, Back
         // Order: 0=Previous, 1=Next, 2=Choose, 3=Back
-        let controls = vec![
+        let controls = [
             (
                 "Previous Episode",
                 "[P]",
@@ -1253,7 +1251,7 @@ impl App {
         let frame_area = frame.size();
 
         // Create a smaller, centered modal area (40% width, 30% height)
-        let modal_width = ((frame_area.width as f32 * 0.4).min(50.0).max(35.0)) as u16;
+        let modal_width = ((frame_area.width as f32 * 0.4).clamp(35.0, 50.0)) as u16;
         let modal_height = 12u16; // Fixed height for 2 sources + header + footer
 
         let modal_area = Rect {
@@ -1420,15 +1418,13 @@ impl App {
         }
 
         // Normal navigation mode with pagination
-        let total_pages = (total_episodes + self.episodes_per_page - 1) / self.episodes_per_page;
+        let total_pages = total_episodes.div_ceil(self.episodes_per_page);
 
         // Calculate number of columns based on terminal width (same as draw function)
         let available_width = 76usize;
         let cell_width = 9usize;
         let cell_spacing = 3usize;
-        let cols = ((available_width - 4) / (cell_width + cell_spacing))
-            .max(1)
-            .min(10);
+        let cols = ((available_width - 4) / (cell_width + cell_spacing)).clamp(1, 10);
 
         match key {
             KeyCode::Esc | KeyCode::Char('b') => {
@@ -2554,10 +2550,10 @@ impl App {
         }
 
         // Check player controls timeout
-        if self.player_controller.state() == PlayerState::ControlsVisible {
-            if self.player_controller.controls_timeout_reached(5) {
-                self.player_controller.hide_controls();
-            }
+        if self.player_controller.state() == PlayerState::ControlsVisible
+            && self.player_controller.controls_timeout_reached(5)
+        {
+            self.player_controller.hide_controls();
         }
 
         // Check mpv status

@@ -76,8 +76,8 @@ pub fn encode_kitty_image(image_data: &[u8], width: u32, height: u32) -> String 
 
     // Calculate actual display size
     // Kitty uses cells, not pixels. Each cell is roughly 2 chars wide
-    let cell_width = (width / 2).max(10).min(80) as usize;
-    let cell_height = height.max(5).min(30) as usize;
+    let cell_width = (width / 2).clamp(10, 80) as usize;
+    let cell_height = height.clamp(5, 30) as usize;
 
     // Kitty transmission command
     // Use inline image transmission protocol
@@ -95,8 +95,8 @@ pub fn encode_iterm_image(image_data: &[u8], width: u32, height: u32) -> String 
     }
 
     let encoded = STANDARD.encode(image_data);
-    let cell_width = (width / 2).max(10).min(80) as usize;
-    let cell_height = height.max(5).min(30) as usize;
+    let cell_width = (width / 2).clamp(10, 80) as usize;
+    let cell_height = height.clamp(5, 30) as usize;
 
     // iTerm2 inline image protocol
     format!(

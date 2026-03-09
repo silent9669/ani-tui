@@ -337,15 +337,13 @@ impl ImageRenderer {
         }
 
         let elapsed = self.last_render_time.elapsed().as_millis();
-        if elapsed < MIN_RENDER_INTERVAL_MS {
-            if self.last_rendered_hash.is_some() {
-                tracing::debug!(
-                    "Skipping render - too soon ({}ms < {}ms)",
-                    elapsed,
-                    MIN_RENDER_INTERVAL_MS
-                );
-                return Ok(None);
-            }
+        if elapsed < MIN_RENDER_INTERVAL_MS && self.last_rendered_hash.is_some() {
+            tracing::debug!(
+                "Skipping render - too soon ({}ms < {}ms)",
+                elapsed,
+                MIN_RENDER_INTERVAL_MS
+            );
+            return Ok(None);
         }
 
         use std::collections::hash_map::DefaultHasher;
@@ -640,7 +638,7 @@ impl ImageRenderer {
         // Spawn chafa process with high-quality settings
         // Using --symbols all for best quality (as used in v2.0.0)
         let mut child = Command::new("chafa")
-            .args(&[
+            .args([
                 "-f",
                 "sixels",
                 "--size",
@@ -742,8 +740,8 @@ impl ImageRenderer {
         }
 
         // Ensure minimum size but allow larger images
-        cols = cols.max(10).min(available_cols);
-        rows = rows.max(5).min(available_rows);
+        cols = cols.clamp(10, available_cols);
+        rows = rows.clamp(5, available_rows);
 
         (cols, rows)
     }
@@ -787,10 +785,7 @@ impl ImageRenderer {
                 if let Some(area) = self.last_rendered_area {
                     for row in area.y..area.y + area.height {
                         queue!(handle, MoveTo(area.x, row)).map_err(|e| {
-                            io::Error::new(
-                                io::ErrorKind::Other,
-                                format!("Failed to position cursor: {}", e),
-                            )
+                            io::Error::other(format!("Failed to position cursor: {}", e))
                         })?;
                         handle.write_all(&vec![b' '; area.width as usize])?;
                     }
@@ -830,12 +825,8 @@ impl ImageRenderer {
         let mut handle = stdout.lock();
 
         for row in area.y..area.y + area.height {
-            queue!(handle, MoveTo(area.x, row)).map_err(|e| {
-                io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("Failed to position cursor: {}", e),
-                )
-            })?;
+            queue!(handle, MoveTo(area.x, row))
+                .map_err(|e| io::Error::other(format!("Failed to position cursor: {}", e)))?;
             handle.write_all(&vec![b' '; area.width as usize])?;
         }
         handle.flush()?;

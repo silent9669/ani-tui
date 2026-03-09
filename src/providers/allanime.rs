@@ -299,9 +299,10 @@ impl AnimeProvider for AllAnimeProvider {
             ];
 
             for priority_name in &priority_sources {
-                if let Some(source) = source_urls.iter().find(|s| {
-                    s["sourceName"].as_str() == Some(*priority_name)
-                }) {
+                if let Some(source) = source_urls
+                    .iter()
+                    .find(|s| s["sourceName"].as_str() == Some(*priority_name))
+                {
                     if let Some(source_url_encoded) = source["sourceUrl"].as_str() {
                         let decoded = Self::decode_provider_id(source_url_encoded);
 

@@ -15,6 +15,12 @@ pub struct SplashScreen {
     load_status: String,
 }
 
+impl Default for SplashScreen {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SplashScreen {
     pub fn new() -> Self {
         Self {
@@ -318,6 +324,12 @@ pub struct SearchOverlay {
     pub is_searching: bool,
 }
 
+impl Default for SearchOverlay {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SearchOverlay {
     pub fn new() -> Self {
         Self {
@@ -427,7 +439,7 @@ impl SourceSelectModal {
 
         let content_height = (sources.len() + 3) as u16;
         let modal_height = content_height.min(frame_area.height.saturating_sub(4));
-        let modal_width = ((frame_area.width as f32 * 0.4).min(50.0).max(40.0)) as u16;
+        let modal_width = ((frame_area.width as f32 * 0.4).clamp(40.0, 50.0)) as u16;
 
         let modal_area = Rect {
             x: frame_area.x + (frame_area.width.saturating_sub(modal_width)) / 2,

@@ -50,10 +50,9 @@ impl EpisodeGrid {
 
         let cols = ((available_width.saturating_sub(4))
             / (config.cell_width + config.cell_spacing))
-            .max(1)
-            .min(config.max_cols);
+            .clamp(1, config.max_cols);
 
-        let total_rows = (episodes.len() + cols - 1) / cols;
+        let total_rows = episodes.len().div_ceil(cols);
         let rows_to_show = total_rows.min(max_visible_rows);
 
         let selected_row = selected_idx / cols;
@@ -174,8 +173,7 @@ impl EpisodeGrid {
 
     pub fn calculate_cols(area_width: usize, config: &EpisodeGridConfig) -> usize {
         ((area_width.saturating_sub(4)) / (config.cell_width + config.cell_spacing))
-            .max(1)
-            .min(config.max_cols)
+            .clamp(1, config.max_cols)
     }
 
     pub fn move_up(selected: usize, cols: usize, _total: usize) -> usize {

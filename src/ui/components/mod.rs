@@ -107,6 +107,12 @@ pub struct LoadingSpinner {
     current_frame: usize,
 }
 
+impl Default for LoadingSpinner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LoadingSpinner {
     pub fn new() -> Self {
         Self {
