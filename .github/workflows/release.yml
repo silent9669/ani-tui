@@ -220,10 +220,15 @@ jobs:
       run: |
         ruby -c homebrew-tap/Formula/ani-tui.rb
 
+    - name: Setup Homebrew tap
+      run: |
+        mkdir -p $(brew --repository)/Library/Taps/silent9669
+        ln -s $(pwd)/homebrew-tap $(brew --repository)/Library/Taps/silent9669/homebrew-tap
+        brew tap silent9669/tap
+
     - name: Test formula installation
       run: |
-        cd homebrew-tap
-        brew install --build-from-source Formula/ani-tui.rb
+        brew install --build-from-source silent9669/tap/ani-tui
         brew test ani-tui
 
     - name: Commit and push to homebrew-tap
