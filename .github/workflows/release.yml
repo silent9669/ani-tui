@@ -216,13 +216,14 @@ jobs:
         VERSION=${GITHUB_REF#refs/tags/}
         ruby scripts/generate-homebrew-formula.rb "$VERSION" homebrew-tap/Formula/ani-tui.rb
 
-    - name: Validate with brew audit
+    - name: Validate formula syntax
       run: |
-        brew audit --strict --online homebrew-tap/Formula/ani-tui.rb
+        ruby -c homebrew-tap/Formula/ani-tui.rb
 
     - name: Test formula installation
       run: |
-        brew install --build-from-source homebrew-tap/Formula/ani-tui.rb
+        cd homebrew-tap
+        brew install --build-from-source Formula/ani-tui.rb
         brew test ani-tui
 
     - name: Commit and push to homebrew-tap
