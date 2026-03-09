@@ -60,7 +60,7 @@ impl SplashScreen {
         frame.render_widget(banner, chunks[1]);
 
         let version_style = Style::default().fg(Color::DarkGray);
-        let version_text = Paragraph::new("v3.6.1 • Terminal UI for Anime Streaming")
+        let version_text = Paragraph::new("v3.7.4 • Terminal UI for Anime Streaming")
             .alignment(Alignment::Center)
             .style(version_style);
         frame.render_widget(version_text, chunks[2]);
