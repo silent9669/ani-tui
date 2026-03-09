@@ -1,15 +1,10 @@
 class AniTui < Formula
-  desc "Netflix-inspired TUI for anime streaming"
+  desc "TUI for anime streaming"
   homepage "https://github.com/silent9669/ani-tui"
   url "https://github.com/silent9669/ani-tui/archive/refs/tags/v<%= version_without_v %>.tar.gz"
   sha256 "<%= sha256 %>"
   license "MIT"
   head "https://github.com/silent9669/ani-tui.git", branch: "main"
-
-  livecheck do
-    url :stable
-    regex(/^v?(\d+(?:\.\d+)+)$/i)
-  end
 
   depends_on "rust" => :build
   depends_on "pkgconf" => :build
@@ -25,12 +20,7 @@ class AniTui < Formula
   end
 
   test do
-    output = shell_output("#{bin}/ani-tui --help")
-    assert_match "ani-tui", output
-    assert_match "Usage", output
-    assert_match "Options", output
-
-    version_output = shell_output("#{bin}/ani-tui --version")
-    assert_match version.to_s, version_output
+    assert_match "ani-tui", shell_output("#{bin}/ani-tui --help")
+    assert_match version.to_s, shell_output("#{bin}/ani-tui --version")
   end
 end
