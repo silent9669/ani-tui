@@ -31,6 +31,13 @@ pub struct ImageCache {
     pub accessed_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone)]
+pub struct UpdateInfo {
+    pub latest_version: String,
+    pub checked_at: DateTime<Utc>,
+    pub show_notification: bool,
+}
+
 impl Database {
     pub async fn new() -> Result<Self> {
         let db_path = Self::default_db_path()?;
@@ -105,6 +112,17 @@ impl Database {
                 title TEXT NOT NULL,
                 cover_url TEXT NOT NULL,
                 added_at TEXT NOT NULL
+            )",
+            [],
+        )?;
+
+        // Update info table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS update_info (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                latest_version TEXT NOT NULL,
+                checked_at TEXT NOT NULL,
+                show_notification INTEGER DEFAULT 0
             )",
             [],
         )?;
@@ -417,6 +435,47 @@ impl Database {
             .collect::<Result<_, _>>()?;
 
         Ok(favorites)
+    }
+
+    pub async fn save_update_info(&self, version: &str, show_notification: bool) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT OR REPLACE INTO update_info (id, latest_version, checked_at, show_notification)
+             VALUES (1, ?1, ?2, ?3)",
+            params![version, Utc::now().to_rfc3339(), show_notification as i32],
+        )?;
+        Ok(())
+    }
+
+    pub async fn get_update_info(&self) -> Result<Option<UpdateInfo>> {
+        let conn = self.conn.lock().await;
+        let mut stmt = conn.prepare(
+            "SELECT latest_version, checked_at, show_notification FROM update_info WHERE id = 1",
+        )?;
+
+        let info = stmt
+            .query_row([], |row| {
+                Ok(UpdateInfo {
+                    latest_version: row.get(0)?,
+                    checked_at: row
+                        .get::<_, String>(1)?
+                        .parse()
+                        .unwrap_or_else(|_| Utc::now()),
+                    show_notification: row.get::<_, i32>(2)? != 0,
+                })
+            })
+            .ok();
+
+        Ok(info)
+    }
+
+    pub async fn clear_update_notification(&self) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE update_info SET show_notification = 0 WHERE id = 1",
+            [],
+        )?;
+        Ok(())
     }
 
     fn default_db_path() -> Result<PathBuf> {

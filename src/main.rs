@@ -5,6 +5,7 @@
 
 use ani_tui::config::Config;
 use ani_tui::ui::App;
+use ani_tui::update::{InstallMethod, UpdateChecker, CURRENT_VERSION};
 use anyhow::Result;
 use clap::Parser;
 use std::sync::Arc;
@@ -25,24 +26,34 @@ struct Cli {
     /// Enable debug mode
     #[arg(short, long)]
     debug: bool,
+
+    /// Check for and install updates
+    #[arg(long)]
+    update: bool,
+
+    /// Check for updates without installing
+    #[arg(long)]
+    check_update: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Initialize logging if debug mode
     if cli.debug {
         tracing_subscriber::fmt::init();
     }
 
-    // Load configuration
+    if cli.check_update {
+        return handle_check_update().await;
+    }
+
+    if cli.update {
+        return handle_self_update().await;
+    }
+
     let config = Config::load(cli.config.as_deref()).await?;
-
-    // Initialize database
     let db = Arc::new(ani_tui::db::Database::new().await?);
-
-    // Run TUI application
     let mut app = App::new(config, db).await?;
 
     if let Some(query) = cli.query {
@@ -50,6 +61,77 @@ async fn main() -> Result<()> {
     }
 
     app.run().await?;
+
+    Ok(())
+}
+
+async fn handle_check_update() -> Result<()> {
+    let checker = UpdateChecker::new();
+
+    match checker.check().await {
+        Ok(Some(result)) if result.has_update => {
+            println!(
+                "ani-tui v{} is available (current: v{})",
+                result.latest_version, result.current_version
+            );
+
+            let method = UpdateChecker::detect_install_method();
+            match method {
+                InstallMethod::Homebrew => {
+                    println!("Run: brew upgrade ani-tui");
+                }
+                InstallMethod::Scoop => {
+                    println!("Run: scoop update ani-tui");
+                }
+                InstallMethod::Binary => {
+                    println!("Run: ani-tui --update");
+                }
+            }
+            println!("\nRelease notes: {}", result.release_url);
+        }
+        Ok(Some(_)) => {
+            println!("ani-tui is up to date (v{})", CURRENT_VERSION);
+        }
+        Ok(None) => {
+            eprintln!("Could not check for updates. Please try again later.");
+        }
+        Err(e) => {
+            eprintln!("Update check failed: {}", e);
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_self_update() -> Result<()> {
+    let method = UpdateChecker::detect_install_method();
+
+    match method {
+        InstallMethod::Homebrew => {
+            eprintln!("Installed via Homebrew.");
+            eprintln!("Please run: brew upgrade ani-tui");
+            std::process::exit(1);
+        }
+        InstallMethod::Scoop => {
+            eprintln!("Installed via Scoop.");
+            eprintln!("Please run: scoop update ani-tui");
+            std::process::exit(1);
+        }
+        InstallMethod::Binary => {}
+    }
+
+    println!("Checking for updates...");
+
+    match UpdateChecker::self_update() {
+        Ok(version) => {
+            println!("\nSuccessfully updated to v{}!", version);
+            println!("Please restart ani-tui to use the new version.");
+        }
+        Err(e) => {
+            eprintln!("\nUpdate failed: {}", e);
+            std::process::exit(1);
+        }
+    }
 
     Ok(())
 }

@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.7.5] - 2026-03-15
+
+### Added
+- Auto-update feature with background version checking during splash screen
+- `--update` CLI flag to update ani-tui to the latest version
+- `--check-update` CLI flag to check for updates without installing
+- Detection of Homebrew/Scoop installations with appropriate update instructions
+- Update notification toast on startup when new version is available
+- Persistent update notifications that survive app restarts
+
+### Changed
+- Update checks run in background with 3-second timeout to not block startup
+
 ## [3.7.4] - 2026-03-15
 
 ### Fixed

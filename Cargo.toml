@@ -1,6 +1,6 @@
 [package]
 name = "ani-tui"
-version = "3.7.4"
+version = "3.7.5"
 edition = "2021"
 authors = ["silent9669 <dev@silent9669.com>"]
 description = "Netflix-inspired TUI for anime streaming"
@@ -55,6 +55,10 @@ image_ascii = "0.1"
 
 # Image encoding
 base64 = "0.22"
+
+# Self-update support
+self_update = { version = "0.43", features = ["archive-tar", "archive-zip", "compression-flate2"] }
+semver = "1.0"
 
 [profile.release]
 opt-level = 3

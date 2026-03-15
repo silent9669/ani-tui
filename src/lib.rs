@@ -6,3 +6,4 @@ pub mod metadata;
 pub mod player;
 pub mod providers;
 pub mod ui;
+pub mod update;

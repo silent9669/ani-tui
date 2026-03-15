@@ -32,6 +32,9 @@ pub enum AniTuiError {
     #[error("Not found: {0}")]
     NotFound(String),
 
+    #[error("Update error: {0}")]
+    Update(String),
+
     #[error("Unknown error: {0}")]
     Unknown(String),
 }

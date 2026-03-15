@@ -8,6 +8,7 @@ use crate::ui::components::{LoadingSpinner, Toast};
 use crate::ui::image_renderer::ImageRenderer;
 use crate::ui::modern_components::{PreviewPanel, SearchOverlay, SplashScreen};
 use crate::ui::player_controller::{ControlAction, PlayerController, PlayerState};
+use crate::update::UpdateChecker;
 use anyhow::Result;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
@@ -144,6 +145,10 @@ pub struct App {
 
     // Track last rendered anime ID in PreviewPanel to detect changes
     last_preview_anime_id: Option<String>,
+
+    // Update checking state
+    update_check_handle: Option<tokio::task::JoinHandle<Option<String>>>,
+    update_notification: Option<String>,
 }
 
 impl App {
@@ -202,6 +207,23 @@ impl App {
 
         // Initialize new image renderer with multi-protocol support
         let image_renderer = ImageRenderer::new();
+
+        let update_notification = db
+            .get_update_info()
+            .await
+            .ok()
+            .flatten()
+            .filter(|i| i.show_notification)
+            .map(|i| {
+                format!(
+                    "ani-tui v{} is available. Run `ani-tui --update` to update.",
+                    i.latest_version
+                )
+            });
+
+        if update_notification.is_some() {
+            let _ = db.clear_update_notification().await;
+        }
 
         Ok(Self {
             config,
@@ -263,6 +285,8 @@ impl App {
             // Preloaded images cache
             preloaded_images: std::collections::HashMap::new(),
             source_modal_for_search: false,
+            update_check_handle: None,
+            update_notification,
         })
     }
 
@@ -2492,6 +2516,29 @@ impl App {
             let splash_duration = 2000;
             let max_splash_time = 5000;
 
+            if self.update_check_handle.is_none() && elapsed < 500 {
+                let db = self.db.clone();
+                self.update_check_handle = Some(tokio::spawn(async move {
+                    let checker = UpdateChecker::new();
+
+                    let result = match tokio::time::timeout(
+                        std::time::Duration::from_secs(3),
+                        checker.check(),
+                    )
+                    .await
+                    {
+                        Ok(Ok(Some(info))) if info.has_update => Some(info.latest_version),
+                        _ => None,
+                    };
+
+                    if let Some(ref version) = result {
+                        let _ = db.save_update_info(version, true).await;
+                    }
+
+                    result
+                }));
+            }
+
             // Fast progress: reach 90% at 1200ms, then hold until 2000ms
             let progress = if elapsed < 1200 {
                 ((elapsed * 90) / 1200).min(90) as u8
@@ -2547,6 +2594,10 @@ impl App {
             // Transition to Home after exactly 2 seconds (or max timeout)
             if elapsed >= splash_duration || elapsed >= max_splash_time {
                 self.current_screen = Screen::Home;
+
+                if let Some(msg) = self.update_notification.take() {
+                    self.show_toast(msg, 10);
+                }
             }
 
             return Ok(());
