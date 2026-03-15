@@ -551,7 +551,6 @@ impl ImageRenderer {
 
         let base64_data = general_purpose::STANDARD.encode(image_data);
 
-        // iTerm2 protocol: width=N means N character cells (not pixels)
         let osc = format!(
             "\x1b]1337;File=inline=1;size={};width={};height={};preserveAspectRatio=1;doNotMoveCursor=1:{}\x07",
             image_data.len(),

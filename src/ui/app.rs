@@ -106,6 +106,8 @@ pub struct App {
         Option<std::pin::Pin<Box<dyn std::future::Future<Output = Option<Vec<u8>>>>>>,
     image_loading: bool,
 
+    iterm2_render_after_draw: Option<(Vec<u8>, Rect)>,
+
     // Preloaded images for smooth switching
     preloaded_images: std::collections::HashMap<String, Vec<u8>>, // anime_id -> image_data
 
@@ -286,6 +288,7 @@ impl App {
             image_loading: false,
             // Preloaded images cache
             preloaded_images: std::collections::HashMap::new(),
+            iterm2_render_after_draw: None,
             source_modal_for_search: false,
             update_check_handle: None,
             update_notification,
@@ -331,6 +334,18 @@ impl App {
 
         loop {
             terminal.draw(|f| self.draw(f))?;
+
+            if let Some((image_data, area)) = self.iterm2_render_after_draw.take() {
+                match self.image_renderer.render(&image_data, area) {
+                    Ok(_) => {
+                        tracing::debug!("Image rendered post-draw in area {:?}", area);
+                        self.last_image_render = Instant::now();
+                    }
+                    Err(e) => {
+                        tracing::warn!("Image render error: {}", e);
+                    }
+                }
+            }
 
             let timeout = tick_rate
                 .checked_sub(last_tick.elapsed())
@@ -806,19 +821,7 @@ impl App {
             self.current_image_data = Some(image_data.to_vec());
         }
 
-        match self.image_renderer.render(image_data, inner_area) {
-            Ok(_) => {
-                tracing::debug!("Image rendered in inner area {:?}", inner_area);
-                self.last_image_render = Instant::now();
-            }
-            Err(e) => {
-                tracing::warn!("Image render error: {}", e);
-                let error_lines = e.to_lines();
-                let error_widget = Paragraph::new(ratatui::text::Text::from(error_lines))
-                    .block(Block::default().borders(Borders::NONE));
-                frame.render_widget(error_widget, inner_area);
-            }
-        }
+        self.iterm2_render_after_draw = Some((image_data.to_vec(), inner_area));
     }
 
     fn show_image_placeholder(&self, frame: &mut Frame, area: Rect, is_error: bool) {

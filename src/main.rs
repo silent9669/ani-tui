@@ -109,7 +109,7 @@ async fn handle_self_update() -> Result<()> {
     match method {
         InstallMethod::Homebrew => {
             eprintln!("Installed via Homebrew.");
-            eprintln!("Please run: brew upgrade ani-tui");
+            eprintln!("Please run: brew update && brew upgrade ani-tui");
             std::process::exit(1);
         }
         InstallMethod::Scoop => {

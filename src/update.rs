@@ -147,7 +147,7 @@ impl UpdateChecker {
 
         match install_method {
             InstallMethod::Homebrew => {
-                anyhow::bail!("Installed via Homebrew. Please run: brew upgrade ani-tui");
+                anyhow::bail!("Installed via Homebrew. Please run: brew update && brew upgrade ani-tui");
             }
             InstallMethod::Scoop => {
                 anyhow::bail!("Installed via Scoop. Please run: scoop update ani-tui");
