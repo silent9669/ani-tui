@@ -814,6 +814,10 @@ impl ImageRenderer {
         matches!(self.protocol, Protocol::Kitty | Protocol::Iterm2)
     }
 
+    pub fn is_first_render(&self) -> bool {
+        self.last_rendered_hash.is_none()
+    }
+
     /// Clear a specific rectangular area by writing spaces
     /// This works for all protocols including iTerm2
     pub fn clear_area(&self, area: Rect) -> io::Result<()> {

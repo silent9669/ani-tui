@@ -790,11 +790,13 @@ impl App {
             None => true,
         };
 
+        let is_first_render = self.image_renderer.is_first_render();
+
         let border_only = Block::default().borders(Borders::ALL).title("Cover Image");
         let inner_area = border_only.inner(area);
         frame.render_widget(border_only, area);
 
-        if needs_update {
+        if needs_update || is_first_render {
             if self.image_renderer.requires_terminal_clear() {
                 if let Err(e) = self.image_renderer.clear_terminal_graphics() {
                     tracing::warn!("Failed to clear terminal graphics: {}", e);
