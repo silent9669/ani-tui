@@ -521,7 +521,7 @@ impl ImageRenderer {
 
     fn render_iterm2(&self, image_data: &[u8], area: Rect) -> Result<(), ImageError> {
         const MARGIN: u16 = 3;
-        const SIZE_INCREASE: f32 = 1.9;
+        const SIZE_INCREASE: f32 = 2.5;
 
         if let Some(ref last_data) = self.last_image_data {
             if last_data == image_data && self.last_rendered_area == Some(area) {
@@ -546,21 +546,17 @@ impl ImageRenderer {
         let display_cols = display_cols.min(available_width as u32);
         let display_rows = display_rows.min(available_height as u32);
 
-        let cell_width = 8u32;
-        let cell_height = 16u32;
-        let display_width_px = display_cols * cell_width;
-        let display_height_px = display_rows * cell_height;
-
         let start_x = area.x + MARGIN + (available_width - display_cols as u16) / 2;
         let start_y = area.y + MARGIN + (available_height - display_rows as u16) / 2;
 
         let base64_data = general_purpose::STANDARD.encode(image_data);
 
+        // iTerm2 protocol: width=N means N character cells (not pixels)
         let osc = format!(
-            "\x1b]1337;File=inline=1;size={};width={}px;height={}px;preserveAspectRatio=1;doNotMoveCursor=1:{}\x07",
+            "\x1b]1337;File=inline=1;size={};width={};height={};preserveAspectRatio=1;doNotMoveCursor=1:{}\x07",
             image_data.len(),
-            display_width_px,
-            display_height_px,
+            display_cols,
+            display_rows,
             base64_data
         );
 
@@ -592,11 +588,11 @@ impl ImageRenderer {
             .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
 
         tracing::debug!(
-            "Rendered image via iTerm2 protocol at ({}, {}) size {}x{} px (with {} cell margins)",
+            "Rendered image via iTerm2 protocol at ({}, {}) size {}x{} cells (with {} cell margins)",
             start_x,
             start_y,
-            display_width_px,
-            display_height_px,
+            display_cols,
+            display_rows,
             MARGIN
         );
 
