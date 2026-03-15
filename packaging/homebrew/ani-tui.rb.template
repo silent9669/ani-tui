@@ -6,8 +6,8 @@ class AniTui < Formula
   license "MIT"
   head "https://github.com/silent9669/ani-tui.git", branch: "main"
 
-  depends_on "rust" => :build
   depends_on "pkgconf" => :build
+  depends_on "rust" => :build
   depends_on "chafa"
   depends_on "mpv"
 
