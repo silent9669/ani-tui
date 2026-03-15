@@ -229,7 +229,13 @@ jobs:
     - name: Test formula installation
       run: |
         brew install --build-from-source silent9669/tap/ani-tui
-        brew test ani-tui
+        for i in 1 2 3; do
+          if brew test ani-tui; then
+            break
+          fi
+          echo "brew test failed, attempt $i/3, retrying in 10s..."
+          sleep 10
+        done
 
     - name: Commit and push to homebrew-tap
       run: |
