@@ -26,3 +26,7 @@ config.toml
 .opencode/
 .ruff_cache/
 .venv/
+AGENTS.md
+
+daytona
+daytona.yaml

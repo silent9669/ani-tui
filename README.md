@@ -2,7 +2,7 @@
 
 A Netflix-inspired TUI (Terminal User Interface) for streaming anime.
 
-![Demo](demo.mp4)
+![Demo](demo1.gif)
 
 ![Version](https://img.shields.io/badge/version-3.7.7-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)
@@ -66,24 +66,24 @@ ani-tui --help
 
 ## Key Bindings
 
-| Key | Action |
-|-----|--------|
-| `↑/↓` | Navigate |
-| `Enter` | Select |
-| `Esc` | Back |
+| Key       | Action        |
+| --------- | ------------- |
+| `↑/↓`     | Navigate      |
+| `Enter`   | Select        |
+| `Esc`     | Back          |
 | `Shift+S` | Change source |
-| `q` | Quit |
+| `q`       | Quit          |
 
 ## Supported Terminals
 
-| Terminal | Image Support |
-|----------|--------------|
-| iTerm2 (macOS) | ✅ Full |
-| Kitty | ✅ Full |
-| Warp | ✅ Full |
-| Windows Terminal 1.22+ | ✅ Full |
-| WezTerm | ✅ Full |
-| Terminal.app | ❌ Text only |
+| Terminal               | Image Support |
+| ---------------------- | ------------- |
+| iTerm2 (macOS)         | ✅ Full       |
+| Kitty                  | ✅ Full       |
+| Warp                   | ✅ Full       |
+| Windows Terminal 1.22+ | ✅ Full       |
+| WezTerm                | ✅ Full       |
+| Terminal.app           | ❌ Text only  |
 
 ## Documentation
 
@@ -93,3 +93,4 @@ ani-tui --help
 ## License
 
 MIT License
+
