@@ -1,8 +1,10 @@
 # ani-tui
 
-A Netflix-inspired TUI (Terminal User Interface) for streaming anime with support for English and Vietnamese subtitles.
+A Netflix-inspired TUI (Terminal User Interface) for streaming anime.
 
-![Version](https://img.shields.io/badge/version-3.7.4-blue.svg)
+![Demo](demo.mp4)
+
+![Version](https://img.shields.io/badge/version-3.7.7-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)
 
 ## Features
@@ -10,32 +12,9 @@ A Netflix-inspired TUI (Terminal User Interface) for streaming anime with suppor
 - 🎬 Stream anime with English or Vietnamese subtitles
 - 🔍 Search and browse anime catalog
 - 📺 Continue watching from where you left off
-- 🖼️ Image previews in terminal (with supported terminals)
+- 🖼️ Image previews in terminal (iTerm2, Kitty, Warp, Windows Terminal)
 - ⌨️ Keyboard-driven interface
-- 🌐 Multi-source support (AllAnime, KKPhim)
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                         ani-tui                              │
-├─────────────────────────────────────────────────────────────┤
-│  UI Layer (ratatui)                                         │
-│  ├── Screens: Splash → Source → Home → Search → Episodes   │
-│  ├── Image Rendering: Kitty / iTerm2 / Sixel protocols     │
-│  └── Player Controls: Overlay with progress & navigation   │
-├─────────────────────────────────────────────────────────────┤
-│  Provider Layer                                             │
-│  ├── AllAnime (English)                                    │
-│  ├── KKPhim (Vietnamese)                                   │
-│  └── Provider Registry (language filtering)                │
-├─────────────────────────────────────────────────────────────┤
-│  Data Layer                                                 │
-│  ├── SQLite (watch history, cache)                         │
-│  ├── Image Cache (disk + memory)                           │
-│  └── Config (TOML)                                         │
-└─────────────────────────────────────────────────────────────┘
-```
+- 🔄 Auto-update support
 
 ## Installation
 
@@ -67,7 +46,6 @@ curl -fsSL https://raw.githubusercontent.com/silent9669/ani-tui/master/packaging
 
 - **chafa** (optional) - For image previews in unsupported terminals
   - macOS: `brew install chafa`
-  - Windows: Included in auto-installer
   - Linux: `sudo apt install chafa`
 
 ## Usage
@@ -79,34 +57,39 @@ ani-tui
 # Start with a search query
 ani-tui -q "Attack on Titan"
 
+# Update the app
+ani-tui --update
+
 # Show help
 ani-tui --help
 ```
 
+## Key Bindings
+
+| Key | Action |
+|-----|--------|
+| `↑/↓` | Navigate |
+| `Enter` | Select |
+| `Esc` | Back |
+| `Shift+S` | Change source |
+| `q` | Quit |
+
 ## Supported Terminals
 
-| Terminal | Image Support | Protocol |
-|----------|--------------|----------|
-| iTerm2 (macOS) | ✅ Full | iTerm2 |
-| Kitty | ✅ Full | Kitty |
-| Warp | ✅ Full | iTerm2 |
-| Windows Terminal 1.22+ | ✅ Full | iTerm2 |
-| WezTerm | ✅ Full | iTerm2 |
-| Terminal.app | ❌ None | Text only |
+| Terminal | Image Support |
+|----------|--------------|
+| iTerm2 (macOS) | ✅ Full |
+| Kitty | ✅ Full |
+| Warp | ✅ Full |
+| Windows Terminal 1.22+ | ✅ Full |
+| WezTerm | ✅ Full |
+| Terminal.app | ❌ Text only |
 
 ## Documentation
 
 - [Changelog](docs/CHANGELOG.md)
 - [Image Rendering](docs/image_rendering.md)
 
-## Building from Source
-
-```bash
-git clone https://github.com/silent9669/ani-tui.git
-cd ani-tui
-cargo build --release
-```
-
 ## License
 
-MIT License - see [LICENSE](LICENSE) file for details.
+MIT License
