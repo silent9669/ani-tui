@@ -179,7 +179,9 @@ impl App {
 
         // Load first image immediately if available
         let mut current_image_data = None;
+        let mut current_anime_id = None;
         if let Some(first) = continue_watching.first() {
+            current_anime_id = Some(first.anime_id.clone());
             if !first.cover_url.is_empty() {
                 let image_id = format!("continue_watching_{}", first.anime_id);
                 match image_pipeline
@@ -252,7 +254,7 @@ impl App {
             toast: None,
             // Initialize single image context
             current_image_data,
-            current_anime_id: None,
+            current_anime_id,
             current_sixel_cache: None,
             // Transition tracking
             previous_image_data: None,

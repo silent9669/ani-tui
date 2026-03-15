@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.7.6] - 2026-03-15
+
+### Fixed
+- Fixed image rendering on first dashboard load - images now display correctly immediately on app startup
+- Fixed state inconsistency between `current_image_data` and `current_anime_id` during initialization
+
+## [3.7.5] - 2026-03-14
+
+### Added
+- Auto-update feature with background version checking during splash screen
+- `--update` CLI flag for self-updating the app
+- `--check-update` CLI flag for manual update checking
+- Persistent update notifications via SQLite database
+- Cross-platform update support (macOS via Homebrew, Windows via Scoop, binary fallback)
+
+### Changed
+- Update check runs in background during splash screen with 3-second timeout
+- Non-blocking update notifications that persist across app restarts
+
 ## [3.7.4] - 2026-03-09
 
 ### Added
