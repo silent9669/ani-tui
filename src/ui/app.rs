@@ -2060,6 +2060,13 @@ impl App {
                             }
                         }
 
+                        // Clear images before transitioning to episode select
+                        if self.image_renderer.requires_terminal_clear() {
+                            let _ = self.image_renderer.clear_terminal_graphics();
+                        }
+                        self.current_image_data = None;
+                        self.image_renderer.clear_cache();
+
                         self.current_screen = Screen::EpisodeSelect;
                     }
                     _ => {}
@@ -2358,6 +2365,14 @@ impl App {
                         // Reset filter state
                         self.episode_filter.clear();
                         self.episode_filter_mode = false;
+
+                        // Clear images before transitioning to episode select
+                        if self.image_renderer.requires_terminal_clear() {
+                            let _ = self.image_renderer.clear_terminal_graphics();
+                        }
+                        self.current_image_data = None;
+                        self.image_renderer.clear_cache();
+
                         // Save current screen for back navigation
                         self.previous_screen = Some(self.current_screen);
                         self.current_screen = Screen::EpisodeSelect;

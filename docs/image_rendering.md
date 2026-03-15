@@ -20,7 +20,8 @@ ani-tui v3.7.4 supports image previews in the terminal using multiple graphics p
 - **Supported terminals**: iTerm2, Warp, WezTerm, VSCode, Windows Terminal 1.22+
 - **Features**: Broad compatibility, no external dependencies
 - **Implementation**: OSC 1337 escape sequences with base64 data
-- **Cell size**: 8x16 pixels assumed for calculations
+- **Sizing**: Uses character cells (not pixels) for consistent display across terminals
+- **Size multiplier**: 2.5x for better visibility
 
 ### 3. Sixel Graphics
 **Fallback via chafa**
@@ -94,6 +95,20 @@ Minimum 33ms between renders to prevent flickering and excessive CPU usage.
 - **Kitty/iTerm2**: Hash-based deduplication
 - **Clear**: Called on screen transitions
 
+### Image Clearing on Screen Transitions
+Images are cleared when transitioning between screens to prevent stale images:
+
+| From Screen | To Screen | Clear Action |
+|-------------|-----------|--------------|
+| Home | SourceSelect | ✅ Clear terminal graphics + cache |
+| SourceSelect | Search | ✅ Clear terminal graphics + cache |
+| Search | Home | ✅ Clear terminal graphics + cache |
+| Search | EpisodeSelect | ✅ Clear terminal graphics + cache |
+| Player | EpisodeSelect | ✅ Clear terminal graphics + cache |
+| EpisodeSelect | Search/Home | ✅ Preview reload triggered |
+
+The `clear_terminal_graphics()` method writes spaces over the image area for iTerm2 protocol, while Kitty protocol sends delete commands.
+
 ## Terminal-Specific Notes
 
 ### macOS
@@ -123,6 +138,11 @@ Minimum 33ms between renders to prevent flickering and excessive CPU usage.
 - Kitty in Warp: Known issue, use iTerm2 protocol instead
 - Too many images: Cache clears automatically
 - Resize issues: Images clear on terminal resize
+
+### Images persisting on screen
+- Fixed in v3.7.4: Images now clear on all screen transitions
+- If images appear stale, check that `clear_terminal_graphics()` is called before screen changes
+- iTerm2 requires writing spaces over the image area to clear persistent images
 
 ### Performance
 - Images cached after first render
