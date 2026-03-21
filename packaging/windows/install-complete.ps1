@@ -17,8 +17,36 @@ function Test-Command {
     $null -ne (Get-Command $Command -ErrorAction SilentlyContinue)
 }
 
+function Show-AsciiBanner {
+    <#
+    .SYNOPSIS
+    Displays the ANI-TUI ASCII art banner with alternating Cyan/Magenta colors.
+    Uses single quotes to avoid $ variable interpolation in PowerShell.
+    #>
+    
+    Write-Host ''
+    Write-Host '  /$$$$$$  /$$   /$$ /$$$$$$    /$$$$$$$$ /$$   /$$ /$$$$$$' -ForegroundColor Cyan
+    Write-Host ' /$$__  $$| $$$ | $$|_  $$_/   |__  $$__/| $$  | $$|_  $$_/' -ForegroundColor Magenta
+    Write-Host '| $$  \ $$| $$$$| $$  | $$        | $$   | $$  | $$  | $$  ' -ForegroundColor Cyan
+    Write-Host '| $$$$$$$$| $$ $$ $$  | $$ /$$$$$$| $$   | $$  | $$  | $$  ' -ForegroundColor Magenta
+    Write-Host '| $$__  $$| $$  $$$$  | $$|______/| $$   | $$  | $$  | $$  ' -ForegroundColor Cyan
+    Write-Host '| $$  | $$| $$\  $$$  | $$        | $$   | $$  | $$  | $$  ' -ForegroundColor Magenta
+    Write-Host '| $$  | $$| $$ \  $$ /$$$$$$      | $$   |  $$$$$$/ /$$$$$$' -ForegroundColor Cyan
+    Write-Host '|__/  |__/|__/  \__/|______/      |__/    \______/ |______/' -ForegroundColor Magenta
+    Write-Host ''
+    
+    # Subtitle
+    Write-Host 'Terminal UI for Anime Streaming' -ForegroundColor DarkGray
+    Write-Host ''
+    Write-Host 'Complete Installer for Windows' -ForegroundColor Cyan
+    Write-Host ''
+}
+
+# Show ASCII banner
+Show-AsciiBanner
+
 Write-Status "========================================" "Cyan"
-Write-Status "ani-tui Complete Installer" "Cyan"
+Write-Status "Starting Installation..." "Cyan"
 Write-Status "========================================" "Cyan"
 Write-Status ""
 
