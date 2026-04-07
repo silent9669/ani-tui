@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 const ALLANIME_API: &str = "https://api.allanime.day/api";
-const ALLANIME_REFERRER: &str = "https://allanime.to";
+const ALLANIME_REFERRER: &str = "https://allmanga.to";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct AllAnimeProvider {
@@ -182,9 +182,12 @@ impl AnimeProvider for AllAnimeProvider {
 
         let response: serde_json::Value = self
             .client
-            .get(ALLANIME_API)
-            .query(&[("variables", variables.to_string())])
-            .query(&[("query", search_gql)])
+            .post(ALLANIME_API)
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({
+                "variables": variables,
+                "query": search_gql
+            }))
             .send()
             .await
             .context("Failed to search AllAnime")?
@@ -228,9 +231,12 @@ impl AnimeProvider for AllAnimeProvider {
 
         let response: serde_json::Value = self
             .client
-            .get(ALLANIME_API)
-            .query(&[("variables", variables.to_string())])
-            .query(&[("query", episodes_gql)])
+            .post(ALLANIME_API)
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({
+                "variables": variables,
+                "query": episodes_gql
+            }))
             .send()
             .await
             .context("Failed to get episodes")?
@@ -277,9 +283,12 @@ impl AnimeProvider for AllAnimeProvider {
 
         let response: serde_json::Value = self
             .client
-            .get(ALLANIME_API)
-            .query(&[("variables", variables.to_string())])
-            .query(&[("query", embed_gql)])
+            .post(ALLANIME_API)
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({
+                "variables": variables,
+                "query": embed_gql
+            }))
             .send()
             .await
             .context("Failed to get episode embed")?

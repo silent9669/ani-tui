@@ -2666,10 +2666,10 @@ impl App {
             self.load_preview().await;
         }
 
-        // Smart auto-search with debounce (0.5 seconds)
+        // Smart auto-search with debounce
         if self.search_pending && self.current_screen == Screen::Search {
-            // Check if 500ms has passed since last keypress
-            if self.last_keypress.elapsed().as_millis() >= 500 {
+            // Check if 200ms has passed since last keypress
+            if self.last_keypress.elapsed().as_millis() >= 200 {
                 self.search_pending = false;
                 if self.search_overlay.query.len() >= 2 {
                     // Update UI to show searching
