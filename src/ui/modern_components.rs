@@ -343,7 +343,14 @@ impl SearchOverlay {
         }
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect, sources: &[crate::providers::Language]) {
+    pub fn render(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        sources: &[crate::providers::Language],
+        current_page: usize,
+        total_pages: usize,
+    ) {
         let layout = ratatui::layout::Layout::default()
             .direction(ratatui::layout::Direction::Vertical)
             .margin(1)
@@ -355,7 +362,7 @@ impl SearchOverlay {
             .split(area);
 
         // Centered caption at top
-        let caption = Paragraph::new("Search for Anime")
+        let caption = Paragraph::new("Search for Anime & Films")
             .alignment(Alignment::Center)
             .style(
                 Style::default()
@@ -367,7 +374,7 @@ impl SearchOverlay {
         // Search input
         let search_block = Block::default()
             .borders(Borders::ALL)
-            .title(format!("Search ({} active)", sources.len()));
+            .title(format!("Search ({} active sources)", sources.len()));
 
         let search_text = if self.is_searching {
             format!("{} ▐", self.query)
@@ -392,10 +399,12 @@ impl SearchOverlay {
                 crate::providers::Language::Vietnamese => Color::Yellow,
             };
 
-            let badge = Span::styled(
-                format!("[{}]", anime.base.language),
-                Style::default().fg(lang_color),
-            );
+            let flag = match anime.base.language {
+                crate::providers::Language::English => "🇺🇸",
+                crate::providers::Language::Vietnamese => "🇻🇳",
+            };
+
+            let badge = Span::styled(format!("{} ", flag), Style::default().fg(lang_color));
 
             let title_style = if is_selected {
                 Style::default()
@@ -410,7 +419,6 @@ impl SearchOverlay {
             lines.push(Line::from(vec![
                 Span::raw(prefix),
                 badge,
-                Span::raw(" "),
                 Span::styled(&anime.base.title, title_style),
             ]));
         }
@@ -419,6 +427,26 @@ impl SearchOverlay {
             lines.push(Line::from("No results found"));
         } else if self.query.is_empty() {
             lines.push(Line::from("Type to search..."));
+        }
+
+        // Add pagination info if multiple pages exist
+        if total_pages > 1 {
+            lines.push(Line::from(""));
+            lines.push(
+                Line::from(vec![
+                    Span::raw("--- Page "),
+                    Span::styled(
+                        current_page.to_string(),
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" of "),
+                    Span::styled(total_pages.to_string(), Style::default().fg(Color::Cyan)),
+                    Span::raw(" ---"),
+                ])
+                .alignment(Alignment::Center),
+            );
         }
 
         let results_list = Paragraph::new(Text::from(lines))

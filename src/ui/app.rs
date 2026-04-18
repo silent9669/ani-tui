@@ -3,7 +3,7 @@ use crate::db::Database;
 use crate::image::ImagePipeline;
 use crate::metadata::{EnrichedAnime, MetadataCache};
 use crate::player::Player;
-use crate::providers::{AnimeProvider, Episode, Language, ProviderRegistry};
+use crate::providers::{AnimeProvider, Episode, ProviderRegistry};
 use crate::ui::components::{LoadingSpinner, Toast};
 use crate::ui::image_renderer::ImageRenderer;
 use crate::ui::modern_components::{PreviewPanel, SearchOverlay, SplashScreen};
@@ -23,7 +23,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, ListState, Paragraph},
+    widgets::{Block, Borders, Clear, ListState, Paragraph, Wrap},
     Frame, Terminal,
 };
 use std::io;
@@ -38,6 +38,7 @@ pub enum Screen {
     Search,
     EpisodeSelect,
     Player,
+    Report,
 }
 
 #[allow(dead_code)]
@@ -57,9 +58,8 @@ pub struct App {
     image_pipeline: ImagePipeline,
     player_controller: PlayerController,
 
-    // Source selection - only one source at a time
-    selected_source: Language,
-    selected_source_idx: usize,
+    // Source selection
+    selected_provider_idx: usize,
     show_source_modal: bool,
 
     // Search state
@@ -90,6 +90,7 @@ pub struct App {
     pub(crate) current_image_data: Option<Vec<u8>>,
     current_anime_id: Option<String>,
     current_sixel_cache: Option<String>,
+    report_scroll: u16,
 
     // Image transition tracking for smooth fades
     previous_image_data: Option<Vec<u8>>,
@@ -139,11 +140,16 @@ pub struct App {
 
     // Search debounce
     search_pending: bool,
+    search_worker: Option<tokio::task::JoinHandle<Result<Vec<crate::metadata::EnrichedAnime>>>>,
+    search_current_page: usize,
+    search_items_per_page: usize,
     #[allow(dead_code)]
     last_keypress: Instant,
 
     // Image navigation debounce (prevents rapid re-renders when holding arrow keys)
     last_image_navigation: Instant,
+    last_selection_change: Instant,
+    pending_selection_load: bool,
 
     // Track last rendered anime ID in PreviewPanel to detect changes
     last_preview_anime_id: Option<String>,
@@ -198,13 +204,8 @@ impl App {
             }
         }
 
-        // Setup selected source - only one at a time
-        let selected_source_idx = if config.sources.vietnamese { 1 } else { 0 };
-        let selected_source = if config.sources.vietnamese {
-            Language::Vietnamese
-        } else {
-            Language::English
-        };
+        // Setup selected source - default to first provider
+        let selected_provider_idx = 0;
 
         // Database already has internal locking
         let metadata_cache = MetadataCache::new(db.clone());
@@ -241,8 +242,7 @@ impl App {
             metadata_cache,
             image_pipeline,
             player_controller: PlayerController::new(),
-            selected_source,
-            selected_source_idx,
+            selected_provider_idx,
             show_source_modal: false,
             search_overlay: SearchOverlay::new(),
             enriched_results: Vec::new(),
@@ -258,6 +258,7 @@ impl App {
             current_image_data,
             current_anime_id,
             current_sixel_cache: None,
+            report_scroll: 0,
             // Transition tracking
             previous_image_data: None,
             transition_progress: 0.0,
@@ -280,8 +281,13 @@ impl App {
             episodes_per_page: 100,
             continue_watching_metadata: std::collections::HashMap::new(),
             search_pending: false,
+            search_worker: None,
+            search_current_page: 0,
+            search_items_per_page: 10,
             last_keypress: Instant::now(),
             last_image_navigation: Instant::now(),
+            last_selection_change: Instant::now(),
+            pending_selection_load: false,
             last_preview_anime_id: None,
             // Async image loading state
             pending_image_load: None,
@@ -393,6 +399,49 @@ impl App {
         Ok(())
     }
 
+    fn draw_report(&self, frame: &mut Frame) {
+        let area = frame.size();
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Full Session Activity Logs (↑/↓: Scroll, ESC: Back) ");
+
+        let mpv_log_file = std::env::temp_dir().join("ani-tui-mpv.log");
+        
+        // Use a more efficient way to read the log tail
+        let mpv_logs = if let Ok(content) = std::fs::read_to_string(&mpv_log_file) {
+            let lines: Vec<&str> = content.lines().collect();
+            let start_idx = lines.len().saturating_sub(500);
+            
+            // If scroll is 0, auto-scroll to bottom of these 500 lines
+            // (Wait, report_scroll 0 means top. If we want bottom, we need to know height)
+            lines[start_idx..].join("\n")
+        } else {
+            "No logs found. Start watching to generate activity data.".to_string()
+        };
+
+        let line_count = mpv_logs.lines().count() as u16;
+        let visible_height = area.height.saturating_sub(2);
+        let max_scroll = line_count.saturating_sub(visible_height);
+
+        // Auto-scroll logic: if user hasn't scrolled up, keep at bottom
+        let current_scroll = if self.report_scroll == 0 {
+            max_scroll
+        } else {
+            self.report_scroll.min(max_scroll)
+        };
+
+        let mut display_content = format!("--- Ani-Tui Debug Session (v{}) ---\n\n", env!("CARGO_PKG_VERSION"));
+        display_content.push_str("PLAYER & SYSTEM OUTPUT (Last 500 lines):\n");
+        display_content.push_str("--------------------------\n");
+        display_content.push_str(&mpv_logs);
+
+        let paragraph = Paragraph::new(display_content)
+            .block(block)
+            .scroll((current_scroll, 0))
+            .wrap(Wrap { trim: false });
+
+        frame.render_widget(paragraph, area);
+    }
     fn draw(&mut self, frame: &mut Frame) {
         match self.current_screen {
             Screen::Splash => self.draw_splash(frame),
@@ -401,6 +450,7 @@ impl App {
             Screen::Search => self.draw_search(frame),
             Screen::EpisodeSelect => self.draw_episode_select(frame),
             Screen::Player => self.draw_player(frame),
+            Screen::Report => self.draw_report(frame),
         }
 
         // Draw source modal if active
@@ -428,8 +478,8 @@ impl App {
             .constraints([
                 Constraint::Percentage(30), // Top padding
                 Constraint::Length(3),      // Title
-                Constraint::Length(6),      // Source options
-                Constraint::Length(3),      // Help text
+                Constraint::Length((self.providers.list_providers().len() * 2) as u16), // Source options
+                Constraint::Length(3),                                                  // Help text
                 Constraint::Percentage(30), // Bottom padding
             ])
             .split(area);
@@ -445,45 +495,39 @@ impl App {
         frame.render_widget(title, chunks[1]);
 
         // Source options
-        let sources: Vec<(String, Language, bool)> = vec![
-            (
-                "AllAnime (English)".to_string(),
-                Language::English,
-                self.selected_source == Language::English,
-            ),
-            (
-                "KKPhim (Vietnamese)".to_string(),
-                Language::Vietnamese,
-                self.selected_source == Language::Vietnamese,
-            ),
-        ];
-
+        let providers = self.providers.list_providers();
         let mut lines: Vec<Line> = Vec::new();
-        for (idx, (name, lang, enabled)) in sources.iter().enumerate() {
-            let is_selected = idx == self.selected_source_idx;
+        for (idx, provider) in providers.iter().enumerate() {
+            let is_selected = idx == self.selected_provider_idx;
             let prefix = if is_selected { "▶ " } else { "  " };
-            let radio = if *enabled { "(◉)" } else { "(○)" };
 
-            let lang_badge = match lang {
-                Language::English => Span::styled("[EN]", Style::default().fg(Color::Blue)),
-                Language::Vietnamese => Span::styled("[VN]", Style::default().fg(Color::Yellow)),
-            };
-
-            let style = if is_selected {
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-
-            lines.push(Line::from(vec![
+            let mut spans = vec![
                 Span::raw(prefix),
-                Span::styled(format!("{} ", radio), style),
-                lang_badge,
-                Span::raw(" "),
-                Span::styled(name.clone(), style),
-            ]));
+                Span::styled(
+                    format!("[{}] ", provider.name()),
+                    if is_selected {
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                    },
+                ),
+            ];
+
+            // Add language badges
+            for lang in provider.supported_languages() {
+                let color = if lang.contains("🇻🇳") {
+                    Color::Yellow
+                } else if lang.contains("🇺🇸") || lang.contains("🇬🇧") {
+                    Color::Blue
+                } else {
+                    Color::Green
+                };
+                spans.push(Span::styled(lang, Style::default().fg(color)));
+            }
+
+            lines.push(Line::from(spans));
             lines.push(Line::from(""));
         }
 
@@ -809,6 +853,30 @@ impl App {
 
         let border_only = Block::default().borders(Borders::ALL).title("Cover Image");
         let inner_area = border_only.inner(area);
+
+        let is_halfblocks = matches!(
+            self.image_renderer.protocol(),
+            crate::ui::image_renderer::Protocol::Halfblocks
+                | crate::ui::image_renderer::Protocol::None
+        );
+
+        if is_halfblocks {
+            match self.image_renderer.render(image_data, inner_area) {
+                Ok(Some(lines)) => {
+                    let p = Paragraph::new(Text::from(lines)).block(border_only);
+                    frame.render_widget(p, area);
+                }
+                _ => {
+                    self.show_image_placeholder(frame, area, true);
+                }
+            }
+            // Update cache so next frames skip the heavy processing
+            if needs_update || is_first_render {
+                self.current_image_data = Some(image_data.to_vec());
+            }
+            return;
+        }
+
         frame.render_widget(border_only, area);
 
         if needs_update || is_first_render {
@@ -851,19 +919,53 @@ impl App {
             .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
             .split(main_layout[0]);
 
-        self.search_overlay.results = self.enriched_results.clone();
-        self.search_overlay.selected_index = self.selected_index;
-        self.search_overlay.is_searching =
-            self.search_overlay.query.len() >= 2 && self.enriched_results.is_empty();
-        self.search_overlay
-            .render(frame, content_layout[0], &[self.selected_source]);
+        // Slice results for current page
+        let start = self.search_current_page * self.search_items_per_page;
+        let end = (start + self.search_items_per_page).min(self.enriched_results.len());
+        let page_results = if self.enriched_results.is_empty() {
+            Vec::new()
+        } else {
+            self.enriched_results[start..end].to_vec()
+        };
+
+        self.search_overlay.results = page_results;
+        self.search_overlay.selected_index = self.selected_index.saturating_sub(start);
+        self.search_overlay.is_searching = (self.search_overlay.query.len() >= 2
+            && self.enriched_results.is_empty())
+            || self.search_worker.is_some();
+
+        let providers = self.providers.list_providers();
+        let provider = &providers[self.selected_provider_idx];
+
+        let total_pages = self
+            .enriched_results
+            .len()
+            .div_ceil(self.search_items_per_page);
+        self.search_overlay.render(
+            frame,
+            content_layout[0],
+            &[provider.language()],
+            self.search_current_page + 1,
+            total_pages,
+        );
 
         let selected_anime = self.enriched_results.get(self.selected_index).cloned();
         PreviewPanel::render(frame, content_layout[1], selected_anime.as_ref(), self);
 
-        let status_bar = Paragraph::new(
-            "Shift+C: Change Source | ESC: Back Home | ↑/↓: Navigate | Enter: Select",
-        )
+        let pagination_info = if total_pages > 0 {
+            format!(
+                " | Page {} of {}",
+                self.search_current_page + 1,
+                total_pages
+            )
+        } else {
+            "".to_string()
+        };
+
+        let status_bar = Paragraph::new(format!(
+            "Shift+C: Source | ESC: Back | ↑/↓: Select | ←/→: Page | Enter: View{}",
+            pagination_info
+        ))
         .alignment(Alignment::Center)
         .style(Style::default().fg(Color::Gray));
         frame.render_widget(status_bar, main_layout[1]);
@@ -1313,29 +1415,11 @@ impl App {
             );
         frame.render_widget(caption, chunks[0]);
 
-        let sources: Vec<(String, Language, bool)> = vec![
-            (
-                "AllAnime (English)".to_string(),
-                Language::English,
-                self.selected_source == Language::English,
-            ),
-            (
-                "KKPhim (Vietnamese)".to_string(),
-                Language::Vietnamese,
-                self.selected_source == Language::Vietnamese,
-            ),
-        ];
-
+        let providers = self.providers.list_providers();
         let mut lines: Vec<Line> = Vec::new();
-        for (idx, (name, lang, enabled)) in sources.iter().enumerate() {
-            let is_selected = idx == self.selected_source_idx;
+        for (idx, provider) in providers.iter().enumerate() {
+            let is_selected = idx == self.selected_provider_idx;
             let prefix = if is_selected { "▶ " } else { "  " };
-            let radio = if *enabled { "(◉)" } else { "(○)" };
-
-            let lang_badge = match lang {
-                Language::English => Span::styled("[EN]", Style::default().fg(Color::Blue)),
-                Language::Vietnamese => Span::styled("[VN]", Style::default().fg(Color::Yellow)),
-            };
 
             let style = if is_selected {
                 Style::default()
@@ -1345,14 +1429,24 @@ impl App {
                 Style::default()
             };
 
-            lines.push(Line::from(vec![
+            let mut spans = vec![
                 Span::raw(prefix),
-                Span::styled(radio.to_string(), style),
-                Span::raw(" "),
-                lang_badge,
-                Span::raw(" "),
-                Span::styled(name.clone(), style),
-            ]));
+                Span::styled(format!("{} ", provider.name()), style),
+            ];
+
+            // Add language badges
+            for lang in provider.supported_languages() {
+                let color = if lang.contains("🇻🇳") {
+                    Color::Yellow
+                } else if lang.contains("🇺🇸") || lang.contains("🇬🇧") {
+                    Color::Blue
+                } else {
+                    Color::Green
+                };
+                spans.push(Span::styled(lang, Style::default().fg(color)));
+            }
+
+            lines.push(Line::from(spans));
         }
 
         lines.push(Line::from(""));
@@ -1383,7 +1477,41 @@ impl App {
         frame.render_widget(paragraph, toast_area);
     }
 
+    async fn handle_report_key(&mut self, key: KeyCode) -> Result<()> {
+        match key {
+            KeyCode::Esc => {
+                self.current_screen = self.previous_screen.take().unwrap_or(Screen::Player);
+                self.report_scroll = 0; // Reset scroll for next time
+            }
+            KeyCode::Up => {
+                // If scroll was 0 (bottom auto), we need to set it to something real
+                // This is a bit tricky since we don't know total lines here easily
+                // For now, just decrement. If it goes below 0, it stays at 0.
+                self.report_scroll = self.report_scroll.saturating_sub(1);
+            }
+            KeyCode::Down => {
+                self.report_scroll = self.report_scroll.saturating_add(1);
+            }
+            KeyCode::PageUp => {
+                self.report_scroll = self.report_scroll.saturating_sub(10);
+            }
+            KeyCode::PageDown => {
+                self.report_scroll = self.report_scroll.saturating_add(10);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     async fn handle_key(&mut self, key: KeyCode) -> Result<()> {
+        tracing::info!("Action: User pressed key {:?}", key);
+        // Global keys
+        if let KeyCode::Char('R') = key {
+            self.previous_screen = Some(self.current_screen);
+            self.current_screen = Screen::Report;
+            return Ok(());
+        }
+
         if self.show_source_modal {
             self.handle_source_modal_key(key).await?;
             return Ok(());
@@ -1401,10 +1529,12 @@ impl App {
             Screen::Search => self.handle_search_key(key).await,
             Screen::EpisodeSelect => self.handle_episode_select_key(key).await,
             Screen::Player => self.handle_player_key(key).await,
+            Screen::Report => self.handle_report_key(key).await,
         }
     }
 
     async fn handle_episode_select_key(&mut self, key: KeyCode) -> Result<()> {
+        tracing::info!("Action: Handling episode select key: {:?}", key);
         let total_episodes = self.episodes.len();
 
         // Handle filter mode
@@ -1583,34 +1713,23 @@ impl App {
     }
 
     async fn handle_source_select_key(&mut self, key: KeyCode) -> Result<()> {
+        let total_providers = self.providers.list_providers().len();
         match key {
             KeyCode::Esc => {
+                tracing::info!("Transitioning to Home screen");
                 self.current_screen = Screen::Home;
             }
             KeyCode::Up => {
-                if self.selected_source_idx > 0 {
-                    self.selected_source_idx -= 1;
+                if self.selected_provider_idx > 0 {
+                    self.selected_provider_idx -= 1;
                 }
             }
             KeyCode::Down => {
-                if self.selected_source_idx < 1 {
-                    self.selected_source_idx += 1;
+                if self.selected_provider_idx + 1 < total_providers {
+                    self.selected_provider_idx += 1;
                 }
             }
             KeyCode::Enter => {
-                let new_source = if self.selected_source_idx == 0 {
-                    Language::English
-                } else {
-                    Language::Vietnamese
-                };
-                if new_source != self.selected_source {
-                    tracing::info!(
-                        "Source changed from {:?} to {:?}",
-                        self.selected_source,
-                        new_source
-                    );
-                    self.selected_source = new_source;
-                }
                 // Clear any existing images before transitioning
                 if self.image_renderer.requires_terminal_clear() {
                     let _ = self.image_renderer.clear_terminal_graphics();
@@ -1622,7 +1741,10 @@ impl App {
                 self.image_renderer.clear_cache();
                 self.last_preview_anime_id = None;
                 // After selecting source, go to Search screen
-                self.current_screen = Screen::Search;
+                if self.current_screen != Screen::Search {
+                    tracing::info!("Transitioning to Search screen");
+                    self.current_screen = Screen::Search;
+                }
                 self.needs_preview_load = true;
             }
             _ => {}
@@ -1697,7 +1819,7 @@ impl App {
         );
 
         // Find the provider for this history entry
-        if let Some(_provider) = self.providers.get_provider(&history.provider) {
+        if let Some(provider) = self.providers.get_provider(&history.provider) {
             // Create a basic Anime struct from history
             let anime = crate::providers::Anime {
                 id: history
@@ -1709,11 +1831,7 @@ impl App {
                 provider: history.provider.clone(),
                 title: history.title.clone(),
                 cover_url: history.cover_url.clone(),
-                language: if history.provider == "KKPhim" {
-                    crate::providers::Language::Vietnamese
-                } else {
-                    crate::providers::Language::English
-                },
+                language: provider.language(),
                 total_episodes: None,
                 synopsis: None,
             };
@@ -1920,12 +2038,14 @@ impl App {
     }
 
     async fn handle_search_key(&mut self, key: KeyCode) -> Result<()> {
+        tracing::info!("Action: Handling search key: {:?}", key);
         match key {
             KeyCode::Esc | KeyCode::Char('B') => {
                 // Clear terminal graphics if using Kitty protocol
                 if self.image_renderer.requires_terminal_clear() {
                     let _ = self.image_renderer.clear_terminal_graphics();
                 }
+                tracing::info!("Transitioning to Home screen");
                 self.current_screen = Screen::Home;
                 self.search_overlay.query.clear();
                 self.enriched_results.clear();
@@ -1971,16 +2091,40 @@ impl App {
                     self.search_pending = false;
                 }
             }
+            KeyCode::Left => {
+                if self.search_current_page > 0 {
+                    self.search_current_page -= 1;
+                    self.selected_index = self.search_current_page * self.search_items_per_page;
+                    self.last_selection_change = Instant::now();
+                    self.pending_selection_load = true;
+                }
+            }
+            KeyCode::Right => {
+                let total_pages = self
+                    .enriched_results
+                    .len()
+                    .div_ceil(self.search_items_per_page);
+                if self.search_current_page + 1 < total_pages {
+                    self.search_current_page += 1;
+                    self.selected_index = self.search_current_page * self.search_items_per_page;
+                    self.last_selection_change = Instant::now();
+                    self.pending_selection_load = true;
+                }
+            }
             KeyCode::Up => {
                 if self.selected_index > 0 {
                     self.selected_index -= 1;
-                    self.load_preview().await;
+                    self.search_current_page = self.selected_index / self.search_items_per_page;
+                    self.last_selection_change = Instant::now();
+                    self.pending_selection_load = true;
                 }
             }
             KeyCode::Down => {
                 if self.selected_index < self.enriched_results.len().saturating_sub(1) {
                     self.selected_index += 1;
-                    self.load_preview().await;
+                    self.search_current_page = self.selected_index / self.search_items_per_page;
+                    self.last_selection_change = Instant::now();
+                    self.pending_selection_load = true;
                 }
             }
             KeyCode::Enter => {
@@ -2049,7 +2193,8 @@ impl App {
                     KeyCode::Esc => {
                         // ESC goes back to Dashboard
                         self.save_watch_history().await;
-                        self.current_screen = Screen::Home;
+                        tracing::info!("Transitioning to Home screen");
+                self.current_screen = Screen::Home;
                         self.player_controller = PlayerController::new();
                     }
                     KeyCode::Up | KeyCode::Left => {
@@ -2100,6 +2245,10 @@ impl App {
 
                         self.current_screen = Screen::EpisodeSelect;
                     }
+                    KeyCode::Char('r') | KeyCode::Char('R') => {
+                        self.previous_screen = Some(Screen::Player);
+                        self.current_screen = Screen::Report;
+                    }
                     _ => {}
                 }
             }
@@ -2108,7 +2257,8 @@ impl App {
                     KeyCode::Esc => {
                         // ESC goes back to Dashboard
                         self.save_watch_history().await;
-                        self.current_screen = Screen::Home;
+                        tracing::info!("Transitioning to Home screen");
+                self.current_screen = Screen::Home;
                         self.player_controller = PlayerController::new();
                     }
                     KeyCode::Enter => {
@@ -2117,7 +2267,8 @@ impl App {
                             self.player_controller.play_next_episode();
                             self.play_current_episode().await;
                         } else {
-                            self.current_screen = Screen::Home;
+                            tracing::info!("Transitioning to Home screen");
+                self.current_screen = Screen::Home;
                             self.player_controller = PlayerController::new();
                         }
                     }
@@ -2132,40 +2283,31 @@ impl App {
     }
 
     async fn handle_source_modal_key(&mut self, key: KeyCode) -> Result<()> {
+        let total_providers = self.providers.list_providers().len();
         match key {
             KeyCode::Esc => {
                 self.source_modal_for_search = false;
                 self.show_source_modal = false;
             }
             KeyCode::Up => {
-                if self.selected_source_idx > 0 {
-                    self.selected_source_idx -= 1;
+                if self.selected_provider_idx > 0 {
+                    self.selected_provider_idx -= 1;
                 }
             }
             KeyCode::Down => {
-                if self.selected_source_idx < 1 {
-                    self.selected_source_idx += 1;
+                if self.selected_provider_idx + 1 < total_providers {
+                    self.selected_provider_idx += 1;
                 }
             }
             KeyCode::Enter => {
-                let new_source = if self.selected_source_idx == 0 {
-                    Language::English
-                } else {
-                    Language::Vietnamese
-                };
-                if new_source != self.selected_source {
-                    tracing::info!(
-                        "Source changed from {:?} to {:?}",
-                        self.selected_source,
-                        new_source
-                    );
-                    self.selected_source = new_source;
-                }
                 self.show_source_modal = false;
+                let was_modal_for_search = self.source_modal_for_search;
                 self.source_modal_for_search = false;
 
                 // If on Search screen, refresh results
-                if self.current_screen == Screen::Search && !self.search_overlay.query.is_empty() {
+                if (was_modal_for_search || self.current_screen == Screen::Search)
+                    && !self.search_overlay.query.is_empty()
+                {
                     self.perform_search().await;
                 }
             }
@@ -2206,6 +2348,7 @@ impl App {
                 self.current_screen = Screen::EpisodeSelect;
             }
             ControlAction::BackToMenu => {
+                tracing::info!("Transitioning to Home screen");
                 self.current_screen = Screen::Home;
                 self.player_controller = PlayerController::new();
             }
@@ -2218,52 +2361,40 @@ impl App {
         // Don't search if query is too short
         if query.len() < 2 {
             self.enriched_results.clear();
+            self.search_worker = None;
             return;
         }
 
-        tracing::info!(
-            "Searching for '{}' with source: {:?}",
-            query,
-            self.selected_source
-        );
-
-        // Search selected source only
-        let mut all_results = Vec::new();
-
-        match self
-            .providers
-            .search_filtered(&query, &[self.selected_source])
-            .await
-        {
-            Ok(mut results) => {
-                tracing::info!(
-                    "Found {} results from {:?}",
-                    results.len(),
-                    self.selected_source
-                );
-                all_results.append(&mut results);
-            }
-            Err(e) => {
-                tracing::warn!("Search failed for {:?}: {}", self.selected_source, e);
-            }
+        // Abort existing search if any
+        if let Some(handle) = self.search_worker.take() {
+            handle.abort();
         }
 
-        // Update results
-        let enriched: Vec<_> = all_results
-            .into_iter()
-            .map(|base| crate::metadata::EnrichedAnime {
-                base,
-                metadata: None,
-            })
-            .collect();
+        let providers = Arc::new(crate::providers::ProviderRegistry::new(&self.config));
+        let provider_idx = self.selected_provider_idx;
 
-        self.enriched_results = enriched;
-        self.selected_index = 0;
+        tracing::info!("Searching for '{}' in background...", query);
 
-        // Load preview for first result
-        if !self.enriched_results.is_empty() {
-            self.load_preview().await;
-        }
+        // Spawn search in background
+        let handle = tokio::spawn(async move {
+            let providers_list = providers.list_providers();
+            let provider = &providers_list[provider_idx];
+
+            let results = provider.search(&query).await?;
+
+            let enriched: Vec<_> = results
+                .into_iter()
+                .map(|base| crate::metadata::EnrichedAnime {
+                    base,
+                    metadata: None,
+                })
+                .collect();
+
+            Ok(enriched)
+        });
+
+        self.search_worker = Some(handle);
+        self.search_overlay.is_searching = true;
     }
 
     async fn load_preview(&mut self) {
@@ -2517,6 +2648,31 @@ impl App {
     }
 
     async fn on_tick(&mut self) -> Result<()> {
+        // Check search worker
+        if let Some(handle) = &mut self.search_worker {
+            if handle.is_finished() {
+                if let Some(handle) = self.search_worker.take() {
+                    match handle.await? {
+                        Ok(results) => {
+                            self.enriched_results = results;
+                            self.selected_index = 0;
+                            self.search_current_page = 0;
+                            self.search_overlay.is_searching = false;
+
+                            // Trigger preview load
+                            if !self.enriched_results.is_empty() {
+                                self.load_preview().await;
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Search worker failed: {}", e);
+                            self.search_overlay.is_searching = false;
+                        }
+                    }
+                }
+            }
+        }
+
         if self.current_screen == Screen::Splash {
             self.splash_screen.tick();
             let elapsed = self.splash_start.elapsed().as_millis() as u64;
@@ -2600,6 +2756,7 @@ impl App {
 
             // Transition to Home after exactly 2 seconds (or max timeout)
             if elapsed >= splash_duration || elapsed >= max_splash_time {
+                tracing::info!("Transitioning to Home screen");
                 self.current_screen = Screen::Home;
 
                 if let Some(msg) = self.update_notification.take() {
@@ -2660,9 +2817,12 @@ impl App {
             self.load_continue_watching_image().await;
         }
 
-        // Load preview image when entering search mode
-        if self.needs_preview_load && self.current_screen == Screen::Search {
-            self.needs_preview_load = false;
+        // Load preview image when selection has settled (debounced 150ms)
+        if self.pending_selection_load
+            && self.current_screen == Screen::Search
+            && self.last_selection_change.elapsed().as_millis() >= 150
+        {
+            self.pending_selection_load = false;
             self.load_preview().await;
         }
 
@@ -2675,11 +2835,8 @@ impl App {
                     // Update UI to show searching
                     self.search_overlay.is_searching = true;
 
-                    // Perform search
+                    // Perform search (now non-blocking)
                     self.perform_search().await;
-
-                    // Stop showing searching indicator
-                    self.search_overlay.is_searching = false;
                 }
             }
         }

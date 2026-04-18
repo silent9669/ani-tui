@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use std::collections::HashMap;
 
-const CONSUMET_API: &str = "https://api.consumet.org";
+const CONSUMET_API: &str = "https://api-anime-rouge.vercel.app/gogoanime";
 
 pub struct GogoanimeProvider {
     client: reqwest::Client,
@@ -14,20 +14,20 @@ pub struct GogoanimeProvider {
 #[allow(dead_code)]
 struct GogoSearchResult {
     id: String,
-    title: String,
+    name: String,
     #[serde(default)]
-    image: String,
-    #[serde(default, rename = "releaseDate")]
-    release_date: Option<String>,
-    #[serde(default, rename = "subOrDub")]
-    sub_or_dub: String,
+    img: String,
+    #[serde(default, rename = "releasedYear")]
+    released_year: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 struct GogoEpisode {
-    id: String,
-    number: u32,
+    #[serde(rename = "episodeId")]
+    episode_id: String,
+    #[serde(rename = "episodeNo")]
+    episode_no: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -38,8 +38,8 @@ struct GogoStreamSource {
 
 #[derive(Debug, Deserialize)]
 struct GogoStreamResponse {
-    headers: Option<serde_json::Value>,
     sources: Vec<GogoStreamSource>,
+    headers: Option<serde_json::Value>,
 }
 
 impl Default for GogoanimeProvider {
@@ -57,119 +57,6 @@ impl GogoanimeProvider {
 
         Self { client }
     }
-
-    /// Decode ani-cli style provider ID
-    #[allow(dead_code)]
-    fn decode_provider_id(encoded: &str) -> String {
-        // Remove -- prefix if present
-        let encoded = encoded.trim_start_matches("--");
-
-        // Map hex pairs to characters (same as ani-cli)
-        let mapping: HashMap<&str, char> = [
-            ("79", 'A'),
-            ("7a", 'B'),
-            ("7b", 'C'),
-            ("7c", 'D'),
-            ("7d", 'E'),
-            ("7e", 'F'),
-            ("7f", 'G'),
-            ("70", 'H'),
-            ("71", 'I'),
-            ("72", 'J'),
-            ("73", 'K'),
-            ("74", 'L'),
-            ("75", 'M'),
-            ("76", 'N'),
-            ("77", 'O'),
-            ("68", 'P'),
-            ("69", 'Q'),
-            ("6a", 'R'),
-            ("6b", 'S'),
-            ("6c", 'T'),
-            ("6d", 'U'),
-            ("6e", 'V'),
-            ("6f", 'W'),
-            ("60", 'X'),
-            ("61", 'Y'),
-            ("62", 'Z'),
-            ("59", 'a'),
-            ("5a", 'b'),
-            ("5b", 'c'),
-            ("5c", 'd'),
-            ("5d", 'e'),
-            ("5e", 'f'),
-            ("5f", 'g'),
-            ("50", 'h'),
-            ("51", 'i'),
-            ("52", 'j'),
-            ("53", 'k'),
-            ("54", 'l'),
-            ("55", 'm'),
-            ("56", 'n'),
-            ("57", 'o'),
-            ("48", 'p'),
-            ("49", 'q'),
-            ("4a", 'r'),
-            ("4b", 's'),
-            ("4c", 't'),
-            ("4d", 'u'),
-            ("4e", 'v'),
-            ("4f", 'w'),
-            ("40", 'x'),
-            ("41", 'y'),
-            ("42", 'z'),
-            ("08", '0'),
-            ("09", '1'),
-            ("0a", '2'),
-            ("0b", '3'),
-            ("0c", '4'),
-            ("0d", '5'),
-            ("0e", '6'),
-            ("0f", '7'),
-            ("00", '8'),
-            ("01", '9'),
-            ("15", '-'),
-            ("16", '.'),
-            ("67", '_'),
-            ("46", '~'),
-            ("02", ':'),
-            ("17", '/'),
-            ("07", '?'),
-            ("1b", '#'),
-            ("63", '['),
-            ("65", ']'),
-            ("78", '@'),
-            ("19", '!'),
-            ("1c", '$'),
-            ("1e", '&'),
-            ("10", '('),
-            ("11", ')'),
-            ("12", '*'),
-            ("13", '+'),
-            ("14", ','),
-            ("03", ';'),
-            ("05", '='),
-            ("1d", '%'),
-        ]
-        .iter()
-        .cloned()
-        .collect();
-
-        let mut result = String::new();
-        let chars: Vec<char> = encoded.chars().collect();
-
-        for chunk in chars.chunks(2) {
-            if chunk.len() == 2 {
-                let hex = format!("{}{}", chunk[0], chunk[1]);
-                if let Some(&ch) = mapping.get(hex.as_str()) {
-                    result.push(ch);
-                }
-            }
-        }
-
-        // Fix clock.json path
-        result.replace("/clock", "/clock.json")
-    }
 }
 
 #[async_trait]
@@ -182,12 +69,17 @@ impl AnimeProvider for GogoanimeProvider {
         Language::English
     }
 
-    async fn search(&self, query: &str) -> Result<Vec<Anime>> {
-        let url = format!("{}/anime/gogoanime/{}", CONSUMET_API, query);
+    fn supported_languages(&self) -> Vec<String> {
+        vec!["🇺🇸".to_string()]
+    }
 
-        let results: Vec<GogoSearchResult> = self
+    async fn search(&self, query: &str) -> Result<Vec<Anime>> {
+        let url = format!("{}/search", CONSUMET_API);
+
+        let response: serde_json::Value = self
             .client
             .get(&url)
+            .query(&[("keyword", query), ("page", "1")])
             .send()
             .await
             .context("Failed to search Gogoanime")?
@@ -195,24 +87,38 @@ impl AnimeProvider for GogoanimeProvider {
             .await
             .context("Failed to parse search response")?;
 
-        let anime_list: Vec<Anime> = results
-            .into_iter()
-            .map(|result| Anime {
-                id: result.id,
-                provider: "Gogoanime".to_string(),
-                title: result.title,
-                cover_url: result.image,
-                language: Language::English,
-                total_episodes: None,
-                synopsis: None,
-            })
-            .collect();
+        let mut results = Vec::new();
+        if let Some(animes) = response["animes"].as_array() {
+            for result in animes {
+                let id = result["id"].as_str().unwrap_or_default().to_string();
+                let name = result["name"].as_str().unwrap_or_default().to_string();
+                let img = result["img"].as_str().unwrap_or_default();
+                
+                let img_url = if img.starts_with("http") {
+                    img.to_string()
+                } else {
+                    format!("https://gogocdn.net{}", img)
+                };
+                
+                if !id.is_empty() && !name.is_empty() {
+                    results.push(Anime {
+                        id,
+                        provider: "Gogoanime".to_string(),
+                        title: name,
+                        cover_url: img_url,
+                        language: Language::English,
+                        total_episodes: None,
+                        synopsis: None,
+                    });
+                }
+            }
+        }
 
-        Ok(anime_list)
+        Ok(results)
     }
 
     async fn get_episodes(&self, anime_id: &str) -> Result<Vec<Episode>> {
-        let url = format!("{}/anime/gogoanime/info/{}", CONSUMET_API, anime_id);
+        let url = format!("{}/anime/{}", CONSUMET_API, anime_id);
 
         let response: serde_json::Value = self
             .client
@@ -224,22 +130,21 @@ impl AnimeProvider for GogoanimeProvider {
             .await
             .context("Failed to parse anime info")?;
 
-        let episodes: Vec<Episode> = response["episodes"]
-            .as_array()
-            .unwrap_or(&vec![])
-            .iter()
-            .map(|ep| Episode {
-                number: ep["number"].as_u64().unwrap_or(0) as u32,
-                title: ep["title"].as_str().map(|s| s.to_string()),
-                thumbnail: None,
-            })
-            .collect();
+        let mut episodes = Vec::new();
+        if let Ok(eps) = serde_json::from_value::<Vec<GogoEpisode>>(response["episodes"].clone()) {
+            for ep in eps {
+                episodes.push(Episode {
+                    number: ep.episode_no,
+                    title: None,
+                    thumbnail: None,
+                });
+            }
+        }
 
         Ok(episodes)
     }
 
     async fn get_stream_url(&self, episode_id: &str) -> Result<StreamInfo> {
-        // episode_id format: "anime_id:episode_number"
         let parts: Vec<&str> = episode_id.split(':').collect();
         if parts.len() != 2 {
             anyhow::bail!("Invalid episode_id format");
@@ -248,35 +153,25 @@ impl AnimeProvider for GogoanimeProvider {
         let anime_id = parts[0];
         let ep_number = parts[1];
 
-        // Get episode list to find the episode ID
-        let url = format!("{}/anime/gogoanime/info/{}", CONSUMET_API, anime_id);
-        let info: serde_json::Value = self
+        let url = format!("{}/servers/{}/{}", CONSUMET_API, anime_id, ep_number);
+        let servers: serde_json::Value = self
             .client
             .get(&url)
             .send()
             .await
-            .context("Failed to get anime info")?
+            .context("Failed to get servers")?
             .json()
             .await
-            .context("Failed to parse info")?;
+            .context("Failed to parse servers")?;
 
-        // Find the episode with matching number
-        let empty_vec = vec![];
-        let episodes = info["episodes"].as_array().unwrap_or(&empty_vec);
-        let episode = episodes
-            .iter()
-            .find(|ep| ep["number"].as_u64().unwrap_or(0).to_string() == ep_number)
-            .ok_or_else(|| anyhow::anyhow!("Episode not found"))?;
-
-        let ep_id = episode["id"]
+        let server_id = servers[0]["serverId"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("No episode ID"))?;
+            .ok_or_else(|| anyhow::anyhow!("No servers found"))?;
 
-        // Get streaming links
-        let stream_url = format!("{}/anime/gogoanime/watch/{}", CONSUMET_API, ep_id);
+        let watch_url = format!("{}/watch/{}/{}/{}", CONSUMET_API, anime_id, ep_number, server_id);
         let stream_resp: GogoStreamResponse = self
             .client
-            .get(&stream_url)
+            .get(&watch_url)
             .send()
             .await
             .context("Failed to get stream URL")?
@@ -284,7 +179,6 @@ impl AnimeProvider for GogoanimeProvider {
             .await
             .context("Failed to parse stream response")?;
 
-        // Get best quality source
         let source = stream_resp
             .sources
             .first()

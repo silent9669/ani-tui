@@ -52,7 +52,7 @@ async fn main() -> Result<()> {
         return handle_self_update().await;
     }
 
-    let config = Config::load(cli.config.as_deref()).await?;
+    let config = Config::load()?;
     let db = Arc::new(ani_tui::db::Database::new().await?);
     let mut app = App::new(config, db).await?;
 

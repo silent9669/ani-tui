@@ -2,6 +2,7 @@ use anyhow::Result;
 use base64::{engine::general_purpose, Engine as _};
 use crossterm::cursor::MoveTo;
 use crossterm::queue;
+use image::{imageops::FilterType, GenericImageView};
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
@@ -21,6 +22,8 @@ pub enum Protocol {
     Iterm2,
     /// Sixel graphics (via chafa - works on most modern terminals)
     Sixel,
+    /// Halfblock terminal rendering (cross-platform, fallback)
+    Halfblocks,
     /// No image support (Terminal.app)
     None,
 }
@@ -32,6 +35,7 @@ impl Protocol {
             Protocol::Kitty => "Kitty Graphics Protocol",
             Protocol::Iterm2 => "iTerm2 Inline Images",
             Protocol::Sixel => "Sixel Graphics (chafa)",
+            Protocol::Halfblocks => "Halfblocks (Native fallback)",
             Protocol::None => "None",
         }
     }
@@ -174,6 +178,7 @@ pub struct ImageRenderer {
     last_rendered_area: Option<Rect>,
     last_image_data: Option<Vec<u8>>,
     last_render_time: Instant,
+    last_halfblocks_lines: Option<Vec<Line<'static>>>,
 }
 
 impl ImageRenderer {
@@ -190,6 +195,7 @@ impl ImageRenderer {
             last_rendered_area: None,
             last_image_data: None,
             last_render_time: Instant::now(),
+            last_halfblocks_lines: None,
         }
     }
 
@@ -220,10 +226,14 @@ impl ImageRenderer {
             wt_session
         );
 
-        // 1. Terminal.app - no image support at all
+        // Native truecolor halfblocks are the most stable cross-platform solution
+        // avoiding "image protocol problem of the terminal on both window and mac"
+        // so we default to it when high-fidelity protocols aren't strictly detected
+
+        // 1. Terminal.app - no image support natively, use Halfblocks
         if term_program == "Apple_Terminal" {
-            tracing::warn!("Detected Terminal.app - no image support");
-            return Protocol::None;
+            tracing::info!("Detected Terminal.app - using Halfblocks fallback");
+            return Protocol::Halfblocks;
         }
 
         // 2. iTerm2 - native iTerm2 protocol support
@@ -233,13 +243,12 @@ impl ImageRenderer {
         }
 
         // 3. Warp - use iTerm2 protocol for better compatibility
-        // iTerm2 is stateless and doesn't have the corruption issues Kitty has in Warp
         if term_program == "WarpTerminal" || warp_session {
             tracing::info!("Detected Warp terminal - using iTerm2 protocol");
             return Protocol::Iterm2;
         }
 
-        // 4. WezTerm - uses iTerm2 protocol (has issues with Kitty)
+        // 4. WezTerm - uses iTerm2 protocol
         if term_program == "WezTerm" {
             tracing::info!("Detected WezTerm - using iTerm2 protocol");
             return Protocol::Iterm2;
@@ -251,15 +260,14 @@ impl ImageRenderer {
             return Protocol::Kitty;
         }
 
-        // 6. Ghostty - supports Kitty protocol with unicode placeholders
+        // 6. Ghostty - supports Kitty protocol
         if term_program == "Ghostty" || term_program == "ghostty" {
             tracing::info!("Detected Ghostty - using Kitty protocol");
             return Protocol::Kitty;
         }
 
-        // 7. Windows Terminal - Check for iTerm2 support (v1.22+) or fallback to Sixel
+        // 7. Windows Terminal - Check for iTerm2 support or fallback to Halfblocks
         if wt_session {
-            // Windows Terminal 1.22+ supports iTerm2 inline images
             if let Ok(version) = std::env::var("WT_VERSION") {
                 if Self::is_windows_terminal_modern(&version) {
                     tracing::info!(
@@ -270,22 +278,18 @@ impl ImageRenderer {
                 }
             }
 
-            // Fallback to Sixel for older Windows Terminal versions
-            if Self::is_chafa_available() {
-                tracing::info!("Detected Windows Terminal - using Sixel via chafa");
-                return Protocol::Sixel;
-            }
-            tracing::warn!("Windows Terminal detected but chafa not installed");
+            tracing::info!("Detected Windows Terminal - using Halfblocks fallback");
+            return Protocol::Halfblocks;
         }
 
-        // 8. Other terminals - try Sixel via chafa as fallback
+        // 8. Other terminals - use Sixel if available, else Halfblocks
         if Self::is_chafa_available() {
             tracing::info!("Using Sixel protocol via chafa as fallback");
             return Protocol::Sixel;
         }
 
-        tracing::warn!("No image protocol available (install chafa for best compatibility)");
-        Protocol::None
+        tracing::info!("Using Halfblocks fallback");
+        Protocol::Halfblocks
     }
 
     /// Check if chafa is installed
@@ -309,6 +313,75 @@ impl ImageRenderer {
             }
         }
         false
+    }
+
+    /// Render using Halfblocks (native terminal characters)
+    fn render_halfblocks(
+        &mut self,
+        image_data: &[u8],
+        area: Rect,
+    ) -> Result<Vec<Line<'static>>, ImageError> {
+        let img = image::load_from_memory(image_data)
+            .map_err(|e| ImageError::InvalidImageData(e.to_string()))?;
+
+        // Calculate size maintaining aspect ratio
+        let img_width = img.width() as f32;
+        let img_height = img.height() as f32;
+
+        let term_width = area.width as f32;
+        // terminal cells are roughly 2x as tall as they are wide.
+        // since we use half blocks, 1 cell = 2 vertical pixels.
+        let term_height_px = (area.height as f32) * 2.0;
+
+        let width_ratio = term_width / img_width;
+        let height_ratio = term_height_px / img_height;
+        let scale = width_ratio.min(height_ratio).min(1.0); // Don't upscale
+
+        let target_width = (img_width * scale).max(1.0) as u32;
+        let target_height = (img_height * scale).max(2.0) as u32;
+
+        let resized = img.resize_exact(target_width, target_height, FilterType::Nearest);
+
+        let mut lines = Vec::new();
+        // Since we are rendering to a specific Rect area, we want to center the image if it's smaller
+        let pad_x = (area.width as u32).saturating_sub(target_width) / 2;
+        let pad_y_cells = (area.height as u32).saturating_sub(target_height / 2) / 2;
+
+        // Top padding
+        for _ in 0..pad_y_cells {
+            lines.push(Line::from(""));
+        }
+
+        for y in (0..target_height).step_by(2) {
+            let mut spans = Vec::new();
+
+            // Left padding
+            if pad_x > 0 {
+                spans.push(Span::raw(" ".repeat(pad_x as usize)));
+            }
+
+            for x in 0..target_width {
+                let top = resized.get_pixel(x, y);
+                let bottom = if y + 1 < target_height {
+                    resized.get_pixel(x, y + 1)
+                } else {
+                    top // fallback
+                };
+
+                let top_color = Color::Rgb(top[0], top[1], top[2]);
+                let bottom_color = Color::Rgb(bottom[0], bottom[1], bottom[2]);
+
+                spans.push(Span::styled(
+                    "▀",
+                    Style::default().fg(top_color).bg(bottom_color),
+                ));
+            }
+            lines.push(Line::from(spans));
+        }
+
+        // Bottom padding will be handled naturally by the widget
+
+        Ok(lines)
     }
 
     /// Render an image to the terminal
@@ -364,6 +437,11 @@ impl ImageRenderer {
 
         if !should_render {
             tracing::debug!("Skipping image render - already rendered at this position");
+            if matches!(self.protocol, Protocol::Halfblocks | Protocol::None) {
+                if let Some(lines) = &self.last_halfblocks_lines {
+                    return Ok(Some(lines.clone()));
+                }
+            }
             return Ok(None);
         }
 
@@ -383,9 +461,10 @@ impl ImageRenderer {
                 self.render_sixel(image_data, area)?;
                 Ok(None)
             }
-            Protocol::None => {
-                let term = std::env::var("TERM_PROGRAM").unwrap_or_else(|_| "Unknown".to_string());
-                Err(ImageError::ProtocolNotSupported(term))
+            Protocol::Halfblocks | Protocol::None => {
+                let lines = self.render_halfblocks(image_data, area)?;
+                self.last_halfblocks_lines = Some(lines.clone());
+                Ok(Some(lines))
             }
         };
 
@@ -749,6 +828,7 @@ impl ImageRenderer {
         self.last_rendered_area = None;
         self.last_image_data = None;
         self.last_render_time = Instant::now();
+        self.last_halfblocks_lines = None;
         tracing::debug!("Image renderer cache cleared");
     }
 
@@ -799,7 +879,7 @@ impl ImageRenderer {
                 handle.flush()?;
                 tracing::debug!("Terminal graphics cleared for Sixel protocol");
             }
-            Protocol::None => {
+            Protocol::Halfblocks | Protocol::None => {
                 // No graphics to clear
                 tracing::debug!("No graphics protocol: nothing to clear");
             }

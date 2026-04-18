@@ -1,7 +1,9 @@
 use super::{Anime, AnimeProvider, Episode, Language, StreamInfo};
+use aes::cipher::{KeyIvInit, StreamCipher};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use reqwest::header::{self, HeaderMap};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -25,7 +27,7 @@ impl AllAnimeProvider {
         headers.insert(
             header::USER_AGENT,
             header::HeaderValue::from_static(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             ),
         );
         headers.insert(
@@ -40,6 +42,71 @@ impl AllAnimeProvider {
             .expect("Failed to create HTTP client");
 
         Self { client }
+    }
+
+    pub fn decrypt_tobeparsed(encrypted: &str) -> Result<String> {
+        let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encrypted)
+            .context("Failed to decode base64 tobeparsed")?;
+
+        // Format: IV (12 bytes) + Ciphertext + Signature (16 bytes)
+        if decoded.len() < 28 {
+            anyhow::bail!("Encrypted data too short");
+        }
+
+        // Key = Sha256("SimtVuagFbGR2K7P")
+        let secret = "SimtVuagFbGR2K7P";
+        let mut hasher = Sha256::new();
+        hasher.update(secret);
+        let key = hasher.finalize();
+
+        // IV = first 12 bytes + counter "00000002"
+        let iv_bytes = &decoded[0..12];
+        let mut iv = [0u8; 16];
+        iv[0..12].copy_from_slice(iv_bytes);
+        iv[15] = 2; // Counter starts at 2 as per ani-cli decode_tobeparsed logic
+
+        // Ciphertext is after IV and before the last 16 bytes (signature)
+        let ciphertext_end = decoded.len() - 16;
+        let ciphertext = &decoded[12..ciphertext_end];
+        let mut data = ciphertext.to_vec();
+
+        type Aes256Ctr = ctr::Ctr128BE<aes::Aes256>;
+        let mut cipher = Aes256Ctr::new(&key, &iv.into());
+        cipher.apply_keystream(&mut data);
+
+        let decrypted = String::from_utf8(data).context("Failed to parse decrypted UTF-8")?;
+        Ok(decrypted)
+    }
+
+    async fn graphql_query(
+        &self,
+        query: &str,
+        variables: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let response: serde_json::Value = self
+            .client
+            .post(ALLANIME_API)
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({
+                "variables": variables,
+                "query": query
+            }))
+            .send()
+            .await
+            .context("GraphQL request failed")?
+            .json()
+            .await
+            .context("Failed to parse GraphQL response")?;
+
+        // Check if data is wrapped in tobeparsed
+        if let Some(data) = response.get("data") {
+            if let Some(tobeparsed) = data["tobeparsed"].as_str() {
+                let decrypted = Self::decrypt_tobeparsed(tobeparsed)?;
+                return serde_json::from_str(&decrypted).context("Failed to parse decrypted JSON");
+            }
+        }
+
+        Ok(response)
     }
 
     pub fn decode_provider_id(encoded: &str) -> String {
@@ -165,6 +232,10 @@ impl AnimeProvider for AllAnimeProvider {
         Language::English
     }
 
+    fn supported_languages(&self) -> Vec<String> {
+        vec!["🇺🇸".to_string()]
+    }
+
     async fn search(&self, query: &str) -> Result<Vec<Anime>> {
         let search_gql = r#"query($search: SearchInput $limit: Int $page: Int $translationType: VaildTranslationTypeEnumType $countryOrigin: VaildCountryOriginEnumType) { shows(search: $search limit: $limit page: $page translationType: $translationType countryOrigin: $countryOrigin) { edges { _id name availableEpisodes thumbnail __typename } }}"#;
 
@@ -180,24 +251,16 @@ impl AnimeProvider for AllAnimeProvider {
             "countryOrigin": "ALL"
         });
 
-        let response: serde_json::Value = self
-            .client
-            .post(ALLANIME_API)
-            .header("Content-Type", "application/json")
-            .json(&serde_json::json!({
-                "variables": variables,
-                "query": search_gql
-            }))
-            .send()
-            .await
-            .context("Failed to search AllAnime")?
-            .json()
-            .await
-            .context("Failed to parse search response")?;
-
+        let response = self.graphql_query(search_gql, variables).await?;
         let mut results = Vec::new();
 
-        if let Some(edges) = response["data"]["shows"]["edges"].as_array() {
+        let shows = if let Some(data) = response.get("data") {
+            &data["shows"]
+        } else {
+            &response["shows"]
+        };
+
+        if let Some(edges) = shows["edges"].as_array() {
             for edge in edges {
                 let id = edge["_id"].as_str().unwrap_or_default().to_string();
                 let name = edge["name"].as_str().unwrap_or_default().to_string();
@@ -229,26 +292,16 @@ impl AnimeProvider for AllAnimeProvider {
             "showId": anime_id
         });
 
-        let response: serde_json::Value = self
-            .client
-            .post(ALLANIME_API)
-            .header("Content-Type", "application/json")
-            .json(&serde_json::json!({
-                "variables": variables,
-                "query": episodes_gql
-            }))
-            .send()
-            .await
-            .context("Failed to get episodes")?
-            .json()
-            .await
-            .context("Failed to parse episodes response")?;
-
+        let response = self.graphql_query(episodes_gql, variables).await?;
         let mut episodes = Vec::new();
 
-        if let Some(episode_list) =
-            response["data"]["show"]["availableEpisodesDetail"]["sub"].as_array()
-        {
+        let show = if let Some(data) = response.get("data") {
+            &data["show"]
+        } else {
+            &response["show"]
+        };
+
+        if let Some(episode_list) = show["availableEpisodesDetail"]["sub"].as_array() {
             for (idx, ep) in episode_list.iter().enumerate() {
                 if let Some(ep_num) = ep.as_str() {
                     episodes.push(Episode {
@@ -281,27 +334,19 @@ impl AnimeProvider for AllAnimeProvider {
             "episodeString": episode_number
         });
 
-        let response: serde_json::Value = self
-            .client
-            .post(ALLANIME_API)
-            .header("Content-Type", "application/json")
-            .json(&serde_json::json!({
-                "variables": variables,
-                "query": embed_gql
-            }))
-            .send()
-            .await
-            .context("Failed to get episode embed")?
-            .json()
-            .await
-            .context("Failed to parse embed response")?;
-
+        let response = self.graphql_query(embed_gql, variables).await?;
         let mut stream_url = String::new();
         let subtitles = Vec::new();
         let mut qualities = Vec::new();
         let mut headers = HashMap::new();
 
-        if let Some(source_urls) = response["data"]["episode"]["sourceUrls"].as_array() {
+        let episode = if let Some(data) = response.get("data") {
+            &data["episode"]
+        } else {
+            &response["episode"]
+        };
+
+        if let Some(source_urls) = episode["sourceUrls"].as_array() {
             // Priority order: direct URLs first (Ok.ru, mp4upload, filemoon), then others
             let priority_sources = [
                 "Ok", "Mp4", "Fm-Hls", "Yt-mp4", "S-mp4", "Luf-Mp4", "Sup", "Uni",

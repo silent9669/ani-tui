@@ -1,6 +1,6 @@
 [package]
 name = "ani-tui"
-version = "3.7.8"
+version = "3.7.9"
 edition = "2021"
 authors = ["silent9669 <dev@silent9669.com>"]
 description = "Netflix-inspired TUI for anime streaming"
@@ -59,6 +59,15 @@ base64 = "0.22"
 # Self-update support
 self_update = { version = "0.43", features = ["archive-tar", "archive-zip", "compression-flate2"] }
 semver = "1.0"
+
+# Crypto for AllAnime decryption
+aes = "0.8"
+ctr = "0.9"
+sha2 = "0.10"
+
+# Installer utilities
+indicatif = "0.17"
+dialoguer = "0.11"
 
 [profile.release]
 opt-level = 3

@@ -4,12 +4,13 @@ A Netflix-inspired TUI (Terminal User Interface) for streaming anime.
 
 ![Demo](demo1.gif)
 
-![Version](https://img.shields.io/badge/version-3.7.8-blue.svg)
+![Version](https://img.shields.io/badge/version-3.7.9-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)
 
 ## Features
 
-- 🎬 Stream anime with English or Vietnamese subtitles
+- 🎬 Stream anime and films from multiple sources (AllAnime, Gogoanime, KKPhim, NguonC, OPhim)
+- 🌐 Multiple subtitle languages supported (English, Vietnamese)
 - 🔍 Search and browse anime catalog
 - 📺 Continue watching from where you left off
 - 🖼️ Image previews in terminal (iTerm2, Kitty, Warp, Windows Terminal)

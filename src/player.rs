@@ -31,6 +31,8 @@ impl Player {
         for (key, value) in headers {
             if key.to_lowercase() == "referer" {
                 cmd.arg(format!("--referrer={}", value));
+            } else {
+                cmd.arg(format!("--http-header-name={}: {}", key, value));
             }
         }
 
@@ -40,10 +42,21 @@ impl Player {
         // Don't exit immediately on error
         cmd.arg("--keep-open=no");
 
-        // Hide mpv console output
-        cmd.stdout(Stdio::null());
-        cmd.stderr(Stdio::null());
+        // Log to file for "Report" feature
+        let log_file = std::env::temp_dir().join("ani-tui-mpv.log");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_file)
+            .context("Failed to open mpv log file")?;
+
+        cmd.stdout(Stdio::from(file.try_clone()?));
+        cmd.stderr(Stdio::from(file));
         cmd.stdin(Stdio::null());
+
+        // Force mpv to flush logs and be more verbose for debugging
+        cmd.arg("--msg-level=all=v");
+        cmd.arg("--msg-time");
 
         // Detach completely from parent process
         #[cfg(unix)]

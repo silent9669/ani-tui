@@ -1,8 +1,7 @@
 pub mod allanime;
-pub mod gogoanime;
-pub mod hike;
+pub mod aniwatch;
 pub mod kkphim;
-pub mod prowlarr;
+pub mod ophim;
 
 use crate::config::Config;
 use anyhow::Result;
@@ -61,6 +60,7 @@ impl std::fmt::Display for Language {
 pub trait AnimeProvider: Send + Sync {
     fn name(&self) -> &str;
     fn language(&self) -> Language;
+    fn supported_languages(&self) -> Vec<String>;
 
     async fn search(&self, query: &str) -> Result<Vec<Anime>>;
     async fn get_episodes(&self, anime_id: &str) -> Result<Vec<Episode>>;
@@ -72,12 +72,32 @@ pub struct ProviderRegistry {
 }
 
 impl ProviderRegistry {
-    pub fn new(_config: &Config) -> Self {
-        // Always include ALL providers - filtering happens at search time
-        let providers: Vec<Arc<dyn AnimeProvider>> = vec![
-            Arc::new(allanime::AllAnimeProvider::new()),
-            Arc::new(kkphim::KkphimProvider::new()),
-        ];
+    pub fn new(config: &Config) -> Self {
+        let mut providers: Vec<Arc<dyn AnimeProvider>> = Vec::new();
+
+        // --- English Sources ---
+
+        // 1. AllAnime
+        if config.sources.allanime {
+            providers.push(Arc::new(allanime::AllAnimeProvider::new()));
+        }
+
+        // 2. AniWatch
+        if config.sources.aniwatch {
+            providers.push(Arc::new(aniwatch::AniWatchProvider::new()));
+        }
+
+        // --- Vietnamese Sources ---
+
+        // 3. KKPhim
+        if config.sources.kkphim {
+            providers.push(Arc::new(kkphim::KkphimProvider::new()));
+        }
+
+        // 4. OPhim
+        if config.sources.ophim {
+            providers.push(Arc::new(ophim::OphimProvider::new()));
+        }
 
         Self { providers }
     }

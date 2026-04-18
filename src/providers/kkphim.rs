@@ -49,6 +49,10 @@ impl AnimeProvider for KkphimProvider {
         Language::Vietnamese
     }
 
+    fn supported_languages(&self) -> Vec<String> {
+        vec!["🇻🇳".to_string()]
+    }
+
     async fn search(&self, query: &str) -> Result<Vec<Anime>> {
         let search_url = format!("{}/tim-kiem", KKPHIM_API);
 
@@ -70,10 +74,21 @@ impl AnimeProvider for KkphimProvider {
                 for item in items {
                     let slug = item["slug"].as_str().unwrap_or_default().to_string();
                     let name = item["name"].as_str().unwrap_or_default().to_string();
-                    let poster = item["poster_url"]
+
+                    let thumb = item["thumb_url"].as_str().unwrap_or_default();
+                    let poster = item["poster_url"].as_str().unwrap_or_default();
+
+                    let cdn = response["data"]["APP_DOMAIN_CDN_IMAGE"]
                         .as_str()
-                        .map(|p| format!("https://img.phimapi.com/{}", p))
-                        .unwrap_or_default();
+                        .unwrap_or("https://phimimg.com");
+
+                    let image_url = if thumb.starts_with("http") {
+                        thumb.to_string()
+                    } else if poster.starts_with("http") {
+                        poster.to_string()
+                    } else {
+                        format!("{}/{}", cdn.trim_end_matches('/'), thumb)
+                    };
 
                     let episode_count = item["episode_total"]
                         .as_str()
@@ -84,7 +99,7 @@ impl AnimeProvider for KkphimProvider {
                             id: slug,
                             provider: "KKPhim".to_string(),
                             title: name,
-                            cover_url: poster,
+                            cover_url: image_url,
                             language: Language::Vietnamese,
                             total_episodes: episode_count,
                             synopsis: item["content"].as_str().map(|s| s.to_string()),
@@ -250,18 +265,28 @@ impl AnimeProvider for KkphimProvider {
         let mut stream_url = String::new();
         let mut subtitles: Vec<Subtitle> = Vec::new();
         let qualities = vec!["auto".to_string()];
-        let mut headers = HashMap::new();
+        let mut headers: HashMap<String, String> = HashMap::new();
 
         if let Some(data) = response.get("data") {
             if let Some(item) = data.get("item") {
                 if let Some(episode_list) = item.get("episodes").and_then(|e| e.as_array()) {
+                    // Sort servers to prioritize Vietsub (usually "#Hà Nội")
+                    let mut sorted_servers = episode_list.clone();
+                    sorted_servers.sort_by(|a, b| {
+                        let a_name = a["server_name"].as_str().unwrap_or("").to_lowercase();
+                        let b_name = b["server_name"].as_str().unwrap_or("").to_lowercase();
+                        let a_priority = if a_name.contains("hà nội") || a_name.contains("vietsub") { 0 } else { 1 };
+                        let b_priority = if b_name.contains("hà nội") || b_name.contains("vietsub") { 0 } else { 1 };
+                        a_priority.cmp(&b_priority)
+                    });
+
                     tracing::info!(
-                        "Searching for episode {} in {} episode entries",
+                        "Searching for episode {} in {} server entries",
                         episode_number,
-                        episode_list.len()
+                        sorted_servers.len()
                     );
 
-                    'outer: for (idx, ep) in episode_list.iter().enumerate() {
+                    'outer: for (idx, ep) in sorted_servers.iter().enumerate() {
                         tracing::debug!("Checking episode entry {}: {:?}", idx, ep.get("name"));
 
                         if let Some(server_data) = ep.get("server_data").and_then(|s| s.as_array())
@@ -340,14 +365,9 @@ impl AnimeProvider for KkphimProvider {
             anyhow::bail!("No working stream URL found for this episode.");
         }
 
+        headers.insert("User-Agent".to_string(), "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36".to_string());
         headers.insert("Referer".to_string(), "https://phimmoiii.net/".to_string());
         headers.insert("Origin".to_string(), "https://phimmoiii.net".to_string());
-
-        tracing::info!(
-            "Returning stream URL: {} (length: {})",
-            stream_url,
-            stream_url.len()
-        );
 
         Ok(StreamInfo {
             video_url: stream_url,
