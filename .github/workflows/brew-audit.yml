@@ -20,7 +20,7 @@ jobs:
 
       - name: Generate test formula
         run: |
-          ruby scripts/generate-homebrew-formula.rb "v0.0.0-test" test-formula.rb
+          HOMEBREW_FORMULA_FALLBACK_BRANCH=master ruby scripts/generate-homebrew-formula.rb "v0.0.0-test" test-formula.rb
 
       - name: Run brew audit
         run: |

@@ -16,7 +16,19 @@ version_without_v = version.gsub(/^v/, '')
 url = "https://github.com/silent9669/ani-tui/archive/refs/tags/#{version}.tar.gz"
 
 puts "Downloading #{url}..."
-sha256 = Digest::SHA256.hexdigest(URI.open(url).read)
+begin
+  sha256 = Digest::SHA256.hexdigest(URI.open(url).read)
+rescue OpenURI::HTTPError => e
+  fallback_branch = ENV['HOMEBREW_FORMULA_FALLBACK_BRANCH']
+  if e.io.status&.first == '404' && fallback_branch && !fallback_branch.empty?
+    fallback_url = "https://github.com/silent9669/ani-tui/archive/refs/heads/#{fallback_branch}.tar.gz"
+    warn "Tag tarball not found for #{version}, falling back to #{fallback_url}"
+    url = fallback_url
+    sha256 = Digest::SHA256.hexdigest(URI.open(url).read)
+  else
+    raise
+  end
+end
 puts "SHA256: #{sha256}"
 
 template_path = File.join(__dir__, '..', 'packaging', 'homebrew', 'ani-tui.rb.template')
