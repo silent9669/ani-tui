@@ -1,5 +1,4 @@
 pub mod allanime;
-pub mod aniwatch;
 pub mod kkphim;
 pub mod ophim;
 
@@ -22,6 +21,7 @@ pub struct Anime {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Episode {
+    pub id: String,
     pub number: u32,
     pub title: Option<String>,
     pub thumbnail: Option<String>,
@@ -76,25 +76,18 @@ impl ProviderRegistry {
         let mut providers: Vec<Arc<dyn AnimeProvider>> = Vec::new();
 
         // --- English Sources ---
-
-        // 1. AllAnime
+        // 1. AllAnime (Anime & Films)
         if config.sources.allanime {
             providers.push(Arc::new(allanime::AllAnimeProvider::new()));
         }
 
-        // 2. AniWatch
-        if config.sources.aniwatch {
-            providers.push(Arc::new(aniwatch::AniWatchProvider::new()));
-        }
-
         // --- Vietnamese Sources ---
-
-        // 3. KKPhim
+        // 2. KKPhim
         if config.sources.kkphim {
             providers.push(Arc::new(kkphim::KkphimProvider::new()));
         }
 
-        // 4. OPhim
+        // 3. OPhim
         if config.sources.ophim {
             providers.push(Arc::new(ophim::OphimProvider::new()));
         }

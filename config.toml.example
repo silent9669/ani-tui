@@ -25,17 +25,14 @@ theme = "dark"
 # Enable AllAnime source (English subtitles)
 allanime = true
 
-# Enable Gogoanime source (English subtitles - currently disabled by default)
-gogoanime = false
+# Enable AniWatch source (English subtitles)
+aniwatch = true
 
-# Enable Vietnamese source (KKPhim)
-vietnamese = true
+# Enable KKPhim source (Vietnamese subtitles/dub)
+kkphim = true
 
-# Prowlarr configuration (optional, for advanced users)
-# [prowlarr]
-# url = "http://localhost:9696"
-# api_key = "your-api-key-here"
-# indexer = 1
+# Enable OPhim source (Vietnamese subtitles/dub)
+ophim = true
 
 [cache]
 # Metadata cache TTL in days (AniList data)

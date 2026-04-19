@@ -170,6 +170,39 @@ impl ImageError {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum RenderOutput {
+    Escape(String),
+    Halfblocks(Vec<Line<'static>>),
+}
+
+use ratatui::widgets::Widget;
+
+pub struct TerminalImage {
+    output: Option<RenderOutput>,
+}
+
+impl TerminalImage {
+    pub fn new(output: Option<RenderOutput>) -> Self {
+        Self { output }
+    }
+}
+
+impl Widget for TerminalImage {
+    fn render(self, area: Rect, buf: &mut ratatui::buffer::Buffer) {
+        if let Some(RenderOutput::Halfblocks(lines)) = self.output {
+            let mut y = area.y;
+            for line in lines {
+                if y >= area.y + area.height {
+                    break;
+                }
+                buf.set_line(area.x, y, &line, area.width);
+                y += 1;
+            }
+        }
+    }
+}
+
 pub struct ImageRenderer {
     protocol: Protocol,
     sixel_cache: Option<Vec<u8>>,
@@ -179,6 +212,7 @@ pub struct ImageRenderer {
     last_image_data: Option<Vec<u8>>,
     last_render_time: Instant,
     last_halfblocks_lines: Option<Vec<Line<'static>>>,
+    last_sequences: Option<String>,
 }
 
 impl ImageRenderer {
@@ -196,7 +230,39 @@ impl ImageRenderer {
             last_image_data: None,
             last_render_time: Instant::now(),
             last_halfblocks_lines: None,
+            last_sequences: None,
         }
+    }
+
+    pub fn render_to_widget(&mut self, image_data: &[u8], area: Rect) -> TerminalImage {
+        match self.render(image_data, area) {
+            Ok(Some(output)) => {
+                if let RenderOutput::Escape(ref seq) = output {
+                    self.last_sequences = Some(seq.clone());
+                }
+                TerminalImage::new(Some(output))
+            }
+            _ => {
+                // If skipped or error, try to return last halfblocks if using that protocol
+                if matches!(self.protocol, Protocol::Halfblocks | Protocol::None) {
+                    if let Some(lines) = &self.last_halfblocks_lines {
+                        return TerminalImage::new(Some(RenderOutput::Halfblocks(lines.clone())));
+                    }
+                }
+                TerminalImage::new(None)
+            }
+        }
+    }
+
+    pub fn flush_sequences(&mut self) -> std::io::Result<()> {
+        use std::io::Write;
+        if let Some(seq) = self.last_sequences.take() {
+            let stdout = std::io::stdout();
+            let mut handle = stdout.lock();
+            handle.write_all(seq.as_bytes())?;
+            handle.flush()?;
+        }
+        Ok(())
     }
 
     /// Get the detected protocol
@@ -248,10 +314,10 @@ impl ImageRenderer {
             return Protocol::Iterm2;
         }
 
-        // 4. WezTerm - uses iTerm2 protocol
+        // 4. WezTerm - supports both Kitty and iTerm2, but Kitty is more robust
         if term_program == "WezTerm" {
-            tracing::info!("Detected WezTerm - using iTerm2 protocol");
-            return Protocol::Iterm2;
+            tracing::info!("Detected WezTerm - using Kitty protocol");
+            return Protocol::Kitty;
         }
 
         // 5. Kitty terminal - native Kitty protocol
@@ -386,13 +452,15 @@ impl ImageRenderer {
 
     /// Render an image to the terminal
     ///
-    /// Returns Ok(None) if image was rendered successfully
+    /// Returns Ok(Some(String)) with escape sequences if using a high-fidelity protocol
+    /// Returns Ok(Some(Vec<Line>)) if using Halfblocks
+    /// Returns Ok(None) if image was skipped (already rendered)
     /// Returns Err if rendering failed
     pub fn render(
         &mut self,
         image_data: &[u8],
         area: Rect,
-    ) -> Result<Option<Vec<Line<'static>>>, ImageError> {
+    ) -> Result<Option<RenderOutput>, ImageError> {
         // Validate image data
         if image_data.is_empty() {
             return Err(ImageError::InvalidImageData("Empty image data".to_string()));
@@ -426,7 +494,7 @@ impl ImageRenderer {
         let current_hash = hasher.finish();
 
         let should_render = match self.protocol {
-            Protocol::Iterm2 | Protocol::Sixel => true,
+            Protocol::Sixel => true,
             _ => match (&self.last_rendered_hash, &self.last_rendered_area) {
                 (Some(last_hash), Some(last_area)) => {
                     *last_hash != current_hash || *last_area != area
@@ -439,7 +507,7 @@ impl ImageRenderer {
             tracing::debug!("Skipping image render - already rendered at this position");
             if matches!(self.protocol, Protocol::Halfblocks | Protocol::None) {
                 if let Some(lines) = &self.last_halfblocks_lines {
-                    return Ok(Some(lines.clone()));
+                    return Ok(Some(RenderOutput::Halfblocks(lines.clone())));
                 }
             }
             return Ok(None);
@@ -450,21 +518,21 @@ impl ImageRenderer {
         // Render based on protocol
         let result = match self.protocol {
             Protocol::Kitty => {
-                self.render_kitty(image_data, area)?;
-                Ok(None)
+                let sequences = self.render_kitty(image_data, area)?;
+                Ok(Some(RenderOutput::Escape(sequences)))
             }
             Protocol::Iterm2 => {
-                self.render_iterm2(image_data, area)?;
-                Ok(None)
+                let sequences = self.render_iterm2(image_data, area)?;
+                Ok(Some(RenderOutput::Escape(sequences)))
             }
             Protocol::Sixel => {
-                self.render_sixel(image_data, area)?;
-                Ok(None)
+                let sequences = self.render_sixel(image_data, area)?;
+                Ok(Some(RenderOutput::Escape(sequences)))
             }
             Protocol::Halfblocks | Protocol::None => {
                 let lines = self.render_halfblocks(image_data, area)?;
                 self.last_halfblocks_lines = Some(lines.clone());
-                Ok(Some(lines))
+                Ok(Some(RenderOutput::Halfblocks(lines)))
             }
         };
 
@@ -495,15 +563,34 @@ impl ImageRenderer {
         is_png || is_jpeg || is_webp || is_gif || is_bmp
     }
 
+    /// Check if data starts with PNG magic bytes
+    fn data_is_png(data: &[u8]) -> bool {
+        data.len() >= 8 && data.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+    }
+
     /// Render using Kitty graphics protocol with cursor-relative positioning
     ///
     /// Uses fixed image ID to prevent accumulation and centers image in the allocated area
-    fn render_kitty(&mut self, image_data: &[u8], area: Rect) -> Result<(), ImageError> {
+    fn render_kitty(&mut self, image_data: &[u8], area: Rect) -> Result<String, ImageError> {
         // Use fixed image ID (always 1) to prevent accumulation and stacking
         let image_id = 1u32;
 
-        // Get image dimensions
+        // Get image dimensions and detect format
         let (img_width, img_height) = self.get_image_dimensions(image_data)?;
+
+        // Detect format for Kitty protocol (f parameter)
+        // 100 = PNG, 24 = RGB, 32 = RGBA
+        let png_data = if Self::data_is_png(image_data) {
+            image_data.to_vec()
+        } else {
+            // Load and re-encode as PNG
+            let img = image::load_from_memory(image_data)
+                .map_err(|e| ImageError::InvalidImageData(e.to_string()))?;
+            let mut cursor = std::io::Cursor::new(Vec::new());
+            img.write_to(&mut cursor, image::ImageFormat::Png)
+                .map_err(|e| ImageError::RenderFailed(format!("Failed to encode as PNG: {}", e)))?;
+            cursor.into_inner()
+        };
 
         // Calculate display size to fit within area while maintaining aspect ratio
         let (display_cols, display_rows) = self.calculate_display_size(
@@ -513,18 +600,14 @@ impl ImageRenderer {
             area.height as u32,
         );
 
-        let stdout = io::stdout();
-        let mut handle = stdout.lock();
+        let mut sequences = String::new();
 
         // Clear ALL previous images to prevent stacking/duplication
         // q=2: suppress all responses to prevent breaking keyboard input
-        let clear_all_cmd = "\x1b_Ga=d,d=A,q=2\x1b\\";
-        handle
-            .write_all(clear_all_cmd.as_bytes())
-            .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
+        sequences.push_str("\x1b_Ga=d,d=A,q=2\x1b\\");
 
-        // Send image data in chunks
-        let base64_data = general_purpose::STANDARD.encode(image_data);
+        // Send PNG data in chunks
+        let base64_data = general_purpose::STANDARD.encode(&png_data);
         let chunk_size = 4096;
         let chunks: Vec<&str> = base64_data
             .as_bytes()
@@ -537,26 +620,16 @@ impl ImageRenderer {
             let is_last = i == chunks.len() - 1;
 
             let control = if is_first {
-                // t=d: direct transmission (data in payload)
-                // f=100: PNG format (we send raw image data)
-                // a=T: transmit action
-                // m=1: more chunks coming
-                // q=2: suppress all responses to prevent breaking keyboard input
                 format!(
-                    "a=T,t=d,f=100,i={},s={},v={},m={},q=2",
+                    "a=T,t=d,f=100,i={},m={},q=2",
                     image_id,
-                    img_width,
-                    img_height,
                     if is_last { 0 } else { 1 }
                 )
             } else {
                 format!("m={}", if is_last { 0 } else { 1 })
             };
 
-            let cmd = format!("\x1b_G{};{}\x1b\\", control, chunk);
-            handle
-                .write_all(cmd.as_bytes())
-                .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
+            sequences.push_str(&format!("\x1b_G{};{}\x1b\\", control, chunk));
         }
 
         // Calculate center position within the area
@@ -564,50 +637,25 @@ impl ImageRenderer {
         let start_y = area.y + (area.height.saturating_sub(display_rows as u16)) / 2;
 
         // Position cursor at the calculated center position
-        queue!(handle, MoveTo(start_x, start_y))
-            .map_err(|e| ImageError::RenderFailed(format!("Failed to position cursor: {}", e)))?;
+        // We use ANSI escape code directly
+        sequences.push_str(&format!("\x1b[{};{}H", start_y + 1, start_x + 1));
 
-        // Create placement at cursor position (no U/V parameters)
+        // Create placement at cursor position
         // C=1: do not move cursor after placement
-        // q=2: suppress all responses to prevent breaking keyboard input
-        let place_cmd = format!(
+        sequences.push_str(&format!(
             "\x1b_Ga=p,i={},c={},r={},C=1,q=2\x1b\\",
             image_id, display_cols, display_rows
-        );
-        handle
-            .write_all(place_cmd.as_bytes())
-            .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
-
-        handle
-            .flush()
-            .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
+        ));
 
         // Update state tracking
         self.last_kitty_image_id = Some(image_id);
 
-        tracing::debug!(
-            "Rendered image {} via Kitty protocol at ({},{}) size {}x{} (centered in area {:?})",
-            image_id,
-            start_x,
-            start_y,
-            display_cols,
-            display_rows,
-            area
-        );
-
-        Ok(())
+        Ok(sequences)
     }
 
-    fn render_iterm2(&self, image_data: &[u8], area: Rect) -> Result<(), ImageError> {
+    fn render_iterm2(&mut self, image_data: &[u8], area: Rect) -> Result<String, ImageError> {
         const MARGIN: u16 = 3;
         const SIZE_INCREASE: f32 = 2.5;
-
-        if let Some(ref last_data) = self.last_image_data {
-            if last_data == image_data && self.last_rendered_area == Some(area) {
-                tracing::debug!("Skipping iTerm2 render - same image and area");
-                return Ok(());
-            }
-        }
 
         let (img_width, img_height) = self.get_image_dimensions(image_data)?;
         let available_width = area.width.saturating_sub(MARGIN * 2);
@@ -625,80 +673,43 @@ impl ImageRenderer {
         let display_cols = display_cols.min(available_width as u32);
         let display_rows = display_rows.min(available_height as u32);
 
-        let start_x = area.x + MARGIN + (available_width - display_cols as u16) / 2;
-        let start_y = area.y + MARGIN + (available_height - display_rows as u16) / 2;
+        let start_x = area.x + MARGIN + (available_width.saturating_sub(display_cols as u16)) / 2;
+        let start_y = area.y + MARGIN + (available_height.saturating_sub(display_rows as u16)) / 2;
 
         let base64_data = general_purpose::STANDARD.encode(image_data);
 
-        let osc = format!(
+        let mut sequences = String::new();
+
+        // Clear area by writing spaces
+        for row in area.y..area.y + area.height {
+            sequences.push_str(&format!("\x1b[{};{}H", row + 1, area.x + 1));
+            sequences.push_str(&" ".repeat(area.width as usize));
+        }
+
+        // Move to start and write image OSC
+        sequences.push_str(&format!("\x1b[{};{}H", start_y + 1, start_x + 1));
+        sequences.push_str(&format!(
             "\x1b]1337;File=inline=1;size={};width={};height={};preserveAspectRatio=1;doNotMoveCursor=1:{}\x07",
             image_data.len(),
             display_cols,
             display_rows,
             base64_data
-        );
+        ));
 
-        let stdout = io::stdout();
-        let mut handle = stdout.lock();
-
-        let spaces = vec![b' '; area.width as usize];
-        for row in area.y..area.y + area.height {
-            queue!(handle, MoveTo(area.x, row)).map_err(|e| {
-                ImageError::RenderFailed(format!("Failed to position cursor: {}", e))
-            })?;
-            handle
-                .write_all(&spaces)
-                .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
-        }
-
-        handle
-            .flush()
-            .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
-
-        queue!(handle, MoveTo(start_x, start_y))
-            .map_err(|e| ImageError::RenderFailed(format!("Failed to position cursor: {}", e)))?;
-
-        handle
-            .write_all(osc.as_bytes())
-            .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
-        handle
-            .flush()
-            .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
-
-        tracing::debug!(
-            "Rendered image via iTerm2 protocol at ({}, {}) size {}x{} cells (with {} cell margins)",
-            start_x,
-            start_y,
-            display_cols,
-            display_rows,
-            MARGIN
-        );
-
-        Ok(())
+        Ok(sequences)
     }
 
     /// Render using Sixel via chafa
-    fn render_sixel(&mut self, image_data: &[u8], area: Rect) -> Result<(), ImageError> {
+    fn render_sixel(&mut self, image_data: &[u8], area: Rect) -> Result<String, ImageError> {
         // Check cache - but invalidate if area size changed
         if let Some(ref cached) = self.sixel_cache {
             // Check if cached sixel is for the same area size
             if let Some(last_area) = self.last_rendered_area {
                 if last_area.width == area.width && last_area.height == area.height {
-                    let stdout = io::stdout();
-                    let mut handle = stdout.lock();
-
-                    // CRITICAL FIX: Position cursor BEFORE writing cached sixel data
-                    queue!(handle, MoveTo(area.x, area.y)).map_err(|e| {
-                        ImageError::RenderFailed(format!("Failed to position cursor: {}", e))
-                    })?;
-
-                    handle
-                        .write_all(cached)
-                        .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
-                    handle
-                        .flush()
-                        .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
-                    return Ok(());
+                    let mut sequences = String::new();
+                    sequences.push_str(&format!("\x1b[{};{}H", area.y + 1, area.x + 1));
+                    sequences.push_str(std::str::from_utf8(cached).unwrap_or(""));
+                    return Ok(sequences);
                 }
             }
             // Area size changed, invalidate cache
@@ -710,7 +721,6 @@ impl ImageRenderer {
         let render_height = area.height.saturating_sub(2);
 
         // Spawn chafa process with high-quality settings
-        // Using --symbols all for best quality (as used in v2.0.0)
         let mut child = Command::new("chafa")
             .args([
                 "-f",
@@ -722,7 +732,7 @@ impl ImageRenderer {
                 "--colors",
                 "256",
                 "--symbols",
-                "all", // High quality symbol set
+                "all",
                 "--dither",
                 "ordered",
                 "-",
@@ -753,29 +763,11 @@ impl ImageRenderer {
         // Cache for reuse
         self.sixel_cache = Some(output.stdout.clone());
 
-        // Write sixel output directly to stdout
-        // Position cursor first to ensure correct placement
-        let stdout = io::stdout();
-        let mut handle = stdout.lock();
+        let mut sequences = String::new();
+        sequences.push_str(&format!("\x1b[{};{}H", area.y + 1, area.x + 1));
+        sequences.push_str(std::str::from_utf8(&output.stdout).unwrap_or(""));
 
-        // Move cursor to top-left of image area
-        queue!(handle, MoveTo(area.x, area.y))
-            .map_err(|e| ImageError::RenderFailed(format!("Failed to position cursor: {}", e)))?;
-
-        handle
-            .write_all(&output.stdout)
-            .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
-        handle
-            .flush()
-            .map_err(|e| ImageError::RenderFailed(e.to_string()))?;
-
-        tracing::debug!(
-            "Rendered image via Sixel protocol at ({}, {})",
-            area.x,
-            area.y
-        );
-
-        Ok(())
+        Ok(sequences)
     }
 
     /// Get image dimensions

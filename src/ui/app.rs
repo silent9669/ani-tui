@@ -107,8 +107,6 @@ pub struct App {
         Option<std::pin::Pin<Box<dyn std::future::Future<Output = Option<Vec<u8>>>>>>,
     image_loading: bool,
 
-    iterm2_render_after_draw: Option<(Vec<u8>, Rect)>,
-
     // Preloaded images for smooth switching
     preloaded_images: std::collections::HashMap<String, Vec<u8>>, // anime_id -> image_data
 
@@ -157,6 +155,16 @@ pub struct App {
     // Update checking state
     update_check_handle: Option<tokio::task::JoinHandle<Option<String>>>,
     update_notification: Option<String>,
+
+    // Report and logs
+    pub user_logs: Vec<(chrono::DateTime<chrono::Local>, String)>,
+    pub report_mode: ReportMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ReportMode {
+    StreamingProgress,
+    UserMovements,
 }
 
 impl App {
@@ -294,16 +302,25 @@ impl App {
             image_loading: false,
             // Preloaded images cache
             preloaded_images: std::collections::HashMap::new(),
-            iterm2_render_after_draw: None,
             source_modal_for_search: false,
             update_check_handle: None,
             update_notification,
+            user_logs: Vec::new(),
+            report_mode: ReportMode::StreamingProgress,
         })
     }
 
     pub fn set_initial_search(&mut self, query: String) {
         self.search_overlay.query = query;
         self.current_screen = Screen::Search;
+    }
+
+    pub fn log_action(&mut self, action: &str) {
+        self.user_logs
+            .push((chrono::Local::now(), action.to_string()));
+        if self.user_logs.len() > 1000 {
+            self.user_logs.remove(0);
+        }
     }
 
     pub async fn run(&mut self) -> Result<()> {
@@ -341,16 +358,11 @@ impl App {
         loop {
             terminal.draw(|f| self.draw(f))?;
 
-            if let Some((image_data, area)) = self.iterm2_render_after_draw.take() {
-                match self.image_renderer.render(&image_data, area) {
-                    Ok(_) => {
-                        tracing::debug!("Image rendered post-draw in area {:?}", area);
-                        self.last_image_render = Instant::now();
-                    }
-                    Err(e) => {
-                        tracing::warn!("Image render error: {}", e);
-                    }
-                }
+            // --- POST-DRAW PASS ---
+            // Flush any pending image escape sequences (Kitty/iTerm2/Sixel)
+            // This happens after Ratatui has drawn its buffer to stdout
+            if let Err(e) = self.image_renderer.flush_sequences() {
+                tracing::warn!("Failed to flush image sequences: {}", e);
             }
 
             let timeout = tick_rate
@@ -401,46 +413,113 @@ impl App {
 
     fn draw_report(&self, frame: &mut Frame) {
         let area = frame.size();
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(" Full Session Activity Logs (↑/↓: Scroll, ESC: Back) ");
 
-        let mpv_log_file = std::env::temp_dir().join("ani-tui-mpv.log");
-        
-        // Use a more efficient way to read the log tail
-        let mpv_logs = if let Ok(content) = std::fs::read_to_string(&mpv_log_file) {
-            let lines: Vec<&str> = content.lines().collect();
-            let start_idx = lines.len().saturating_sub(500);
-            
-            // If scroll is 0, auto-scroll to bottom of these 500 lines
-            // (Wait, report_scroll 0 means top. If we want bottom, we need to know height)
-            lines[start_idx..].join("\n")
-        } else {
-            "No logs found. Start watching to generate activity data.".to_string()
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(0), Constraint::Length(1)])
+            .split(area);
+
+        let title = match self.report_mode {
+            ReportMode::StreamingProgress => {
+                " Streaming Progress & Logs (↑/↓: Scroll, Tab: Switch Mode, ESC: Back) "
+            }
+            ReportMode::UserMovements => {
+                " User Movement Logs (↑/↓: Scroll, Tab: Switch Mode, ESC: Back) "
+            }
         };
 
-        let line_count = mpv_logs.lines().count() as u16;
-        let visible_height = area.height.saturating_sub(2);
+        let block = Block::default().borders(Borders::ALL).title(title);
+
+        let display_content = match self.report_mode {
+            ReportMode::StreamingProgress => {
+                let mpv_log_file = std::env::temp_dir().join("ani-tui-mpv.log");
+                let mpv_logs = if let Ok(content) = std::fs::read_to_string(&mpv_log_file) {
+                    let lines: Vec<&str> = content.lines().collect();
+                    let start_idx = lines.len().saturating_sub(500);
+                    lines[start_idx..].join("\n")
+                } else {
+                    "No logs found. Start watching to generate activity data.".to_string()
+                };
+
+                // Try to parse progress from the last few lines of MPV log
+                // Example format: AV: 00:05:23 / 00:23:40 (22%)
+                let mut progress_text =
+                    "Progress: [--------------------------------------------------] 0%".to_string();
+                if let Ok(content) = std::fs::read_to_string(&mpv_log_file) {
+                    for line in content.lines().rev().take(50) {
+                        if line.contains("AV:") && line.contains("%") {
+                            if let Some(pct_start) = line.rfind('(') {
+                                if let Some(pct_end) = line.rfind('%') {
+                                    if pct_end > pct_start + 1 {
+                                        let pct_str = &line[pct_start + 1..pct_end];
+                                        if let Ok(pct) = pct_str.parse::<u8>() {
+                                            let filled = (pct as usize) / 2;
+                                            let empty = 50 - filled;
+                                            progress_text = format!(
+                                                "Progress: [{}{}] {}%",
+                                                "█".repeat(filled),
+                                                "-".repeat(empty),
+                                                pct
+                                            );
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                format!(
+                    "--- Ani-Tui Streaming Status (v{}) ---\n\n{}\n\nPLAYER OUTPUT (Last 500 lines):\n--------------------------\n{}",
+                    env!("CARGO_PKG_VERSION"),
+                    progress_text,
+                    mpv_logs
+                )
+            }
+            ReportMode::UserMovements => {
+                let mut log_text = format!(
+                    "--- Ani-Tui User Movements (v{}) ---\n\n",
+                    env!("CARGO_PKG_VERSION")
+                );
+
+                if self.user_logs.is_empty() {
+                    log_text.push_str("No user movements recorded yet.");
+                } else {
+                    for (timestamp, action) in &self.user_logs {
+                        log_text.push_str(&format!(
+                            "[{}] {}\n",
+                            timestamp.format("%Y-%m-%d %H:%M:%S"),
+                            action
+                        ));
+                    }
+                }
+                log_text
+            }
+        };
+
+        let line_count = display_content.lines().count() as u16;
+        let visible_height = chunks[0].height.saturating_sub(2);
         let max_scroll = line_count.saturating_sub(visible_height);
 
-        // Auto-scroll logic: if user hasn't scrolled up, keep at bottom
         let current_scroll = if self.report_scroll == 0 {
             max_scroll
         } else {
             self.report_scroll.min(max_scroll)
         };
 
-        let mut display_content = format!("--- Ani-Tui Debug Session (v{}) ---\n\n", env!("CARGO_PKG_VERSION"));
-        display_content.push_str("PLAYER & SYSTEM OUTPUT (Last 500 lines):\n");
-        display_content.push_str("--------------------------\n");
-        display_content.push_str(&mpv_logs);
-
         let paragraph = Paragraph::new(display_content)
             .block(block)
             .scroll((current_scroll, 0))
             .wrap(Wrap { trim: false });
 
-        frame.render_widget(paragraph, area);
+        frame.render_widget(paragraph, chunks[0]);
+
+        // Status bar
+        let status_bar = Paragraph::new("Tab: Switch Mode | ↑/↓: Scroll | ESC: Back")
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::Gray));
+        frame.render_widget(status_bar, chunks[1]);
     }
     fn draw(&mut self, frame: &mut Frame) {
         match self.current_screen {
@@ -564,7 +643,7 @@ impl App {
             // Preview panel for selected item
             self.draw_continue_watching_preview(frame, content_chunks[1]);
         } else {
-            let no_history = Paragraph::new("No watch history yet.\nStart watching to see your progress here!\n\nPress Shift+S to search for anime.")
+            let no_history = Paragraph::new("No watch history yet.\nStart watching to see your progress here!\n\nPress Shift+S to search for anime.\nPress Shift+R to view activity logs.")
                 .alignment(Alignment::Center)
                 .block(Block::default().borders(Borders::ALL));
             frame.render_widget(no_history, main_chunks[0]);
@@ -572,7 +651,7 @@ impl App {
 
         // Status bar at bottom
         let status_bar = Paragraph::new(
-            "↑/↓: Navigate | Enter: Resume | Shift+D: Remove | Shift+S: Search | ESC: Quit",
+            "↑/↓: Navigate | Enter: Resume | Shift+D: Remove | Shift+S: Search | Shift+R: Logs | ESC: Quit",
         )
         .alignment(Alignment::Center)
         .style(Style::default().fg(Color::Gray));
@@ -838,58 +917,35 @@ impl App {
             return;
         }
 
-        if self.last_image_render.elapsed().as_millis() < 33 {
-            let border_only = Block::default().borders(Borders::ALL).title("Cover Image");
+        let border_only = Block::default().borders(Borders::ALL).title("Cover Image");
+        let inner_area = border_only.inner(area);
+
+        if inner_area.width < 10 || inner_area.height < 5 {
             frame.render_widget(border_only, area);
             return;
         }
 
+        // Draw border first
+        frame.render_widget(border_only, area);
+
+        // Check if we need to clear or update
         let needs_update = match &self.current_image_data {
             Some(prev_data) => prev_data != image_data,
             None => true,
         };
 
-        let is_first_render = self.image_renderer.is_first_render();
-
-        let border_only = Block::default().borders(Borders::ALL).title("Cover Image");
-        let inner_area = border_only.inner(area);
-
-        let is_halfblocks = matches!(
-            self.image_renderer.protocol(),
-            crate::ui::image_renderer::Protocol::Halfblocks
-                | crate::ui::image_renderer::Protocol::None
-        );
-
-        if is_halfblocks {
-            match self.image_renderer.render(image_data, inner_area) {
-                Ok(Some(lines)) => {
-                    let p = Paragraph::new(Text::from(lines)).block(border_only);
-                    frame.render_widget(p, area);
-                }
-                _ => {
-                    self.show_image_placeholder(frame, area, true);
-                }
-            }
-            // Update cache so next frames skip the heavy processing
-            if needs_update || is_first_render {
-                self.current_image_data = Some(image_data.to_vec());
-            }
-            return;
+        if needs_update && self.image_renderer.requires_terminal_clear() {
+            let _ = self.image_renderer.clear_terminal_graphics();
+            self.image_renderer.clear_cache();
         }
 
-        frame.render_widget(border_only, area);
-
-        if needs_update || is_first_render {
-            if self.image_renderer.requires_terminal_clear() {
-                if let Err(e) = self.image_renderer.clear_terminal_graphics() {
-                    tracing::warn!("Failed to clear terminal graphics: {}", e);
-                }
-            }
-            self.image_renderer.clear_cache();
+        if needs_update {
             self.current_image_data = Some(image_data.to_vec());
         }
 
-        self.iterm2_render_after_draw = Some((image_data.to_vec(), inner_area));
+        // Use the new widget-based rendering
+        let widget = self.image_renderer.render_to_widget(image_data, inner_area);
+        frame.render_widget(widget, inner_area);
     }
 
     fn show_image_placeholder(&self, frame: &mut Frame, area: Rect, is_error: bool) {
@@ -963,7 +1019,7 @@ impl App {
         };
 
         let status_bar = Paragraph::new(format!(
-            "Shift+C: Source | ESC: Back | ↑/↓: Select | ←/→: Page | Enter: View{}",
+            "Shift+C: Source | ESC: Back | ↑/↓: Select | ←/→: Page | Enter: View | Shift+R: Logs{}",
             pagination_info
         ))
         .alignment(Alignment::Center)
@@ -1482,6 +1538,13 @@ impl App {
             KeyCode::Esc => {
                 self.current_screen = self.previous_screen.take().unwrap_or(Screen::Player);
                 self.report_scroll = 0; // Reset scroll for next time
+            }
+            KeyCode::Tab => {
+                self.report_mode = match self.report_mode {
+                    ReportMode::StreamingProgress => ReportMode::UserMovements,
+                    ReportMode::UserMovements => ReportMode::StreamingProgress,
+                };
+                self.report_scroll = 0;
             }
             KeyCode::Up => {
                 // If scroll was 0 (bottom auto), we need to set it to something real
@@ -2194,7 +2257,7 @@ impl App {
                         // ESC goes back to Dashboard
                         self.save_watch_history().await;
                         tracing::info!("Transitioning to Home screen");
-                self.current_screen = Screen::Home;
+                        self.current_screen = Screen::Home;
                         self.player_controller = PlayerController::new();
                     }
                     KeyCode::Up | KeyCode::Left => {
@@ -2258,7 +2321,7 @@ impl App {
                         // ESC goes back to Dashboard
                         self.save_watch_history().await;
                         tracing::info!("Transitioning to Home screen");
-                self.current_screen = Screen::Home;
+                        self.current_screen = Screen::Home;
                         self.player_controller = PlayerController::new();
                     }
                     KeyCode::Enter => {
@@ -2268,7 +2331,7 @@ impl App {
                             self.play_current_episode().await;
                         } else {
                             tracing::info!("Transitioning to Home screen");
-                self.current_screen = Screen::Home;
+                            self.current_screen = Screen::Home;
                             self.player_controller = PlayerController::new();
                         }
                     }
@@ -2357,6 +2420,9 @@ impl App {
 
     async fn perform_search(&mut self) {
         let query = self.search_overlay.query.clone();
+        if !query.is_empty() {
+            self.log_action(&format!("Searched for: {}", query));
+        }
 
         // Don't search if query is too short
         if query.len() < 2 {
@@ -2483,6 +2549,10 @@ impl App {
     }
 
     async fn select_anime(&mut self, anime: crate::providers::Anime) -> Result<()> {
+        self.log_action(&format!(
+            "Selected anime: {} ({})",
+            anime.title, anime.provider
+        ));
         tracing::info!(
             "Selecting anime: {} from provider: {}",
             anime.title,
@@ -2559,6 +2629,10 @@ impl App {
     async fn play_current_episode(&mut self) {
         self.player_controller.show_controls();
 
+        if let Some(ep) = self.player_controller.current_episode() {
+            self.log_action(&format!("Playing episode {}", ep.number));
+        }
+
         let episode = if let Some(ep) = self.player_controller.current_episode() {
             ep.clone()
         } else {
@@ -2574,7 +2648,7 @@ impl App {
         };
 
         let provider_name = anime.provider.clone();
-        let episode_id = format!("{}:{}", anime.id, episode.number);
+        let episode_id = episode.id.clone();
 
         tracing::info!(
             "Playing episode {} for anime {} (provider: {})",
@@ -2621,6 +2695,7 @@ impl App {
             let provider: Box<dyn AnimeProvider> = match provider_name.as_str() {
                 "AllAnime" => Box::new(crate::providers::allanime::AllAnimeProvider::new()),
                 "KKPhim" => Box::new(crate::providers::kkphim::KkphimProvider::new()),
+                "OPhim" => Box::new(crate::providers::ophim::OphimProvider::new()),
                 _ => return,
             };
 

@@ -1,6 +1,6 @@
 [package]
 name = "ani-tui"
-version = "3.7.9"
+version = "3.8.0"
 edition = "2021"
 authors = ["silent9669 <dev@silent9669.com>"]
 description = "Netflix-inspired TUI for anime streaming"
@@ -12,7 +12,6 @@ repository = "https://github.com/silent9669/ani-tui"
 tokio = { version = "1", features = ["full"] }
 
 # TUI framework
-tui = "0.19"
 crossterm = "0.27"
 ratatui = "0.24"
 

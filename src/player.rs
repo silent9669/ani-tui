@@ -28,12 +28,23 @@ impl Player {
         }
 
         // Add headers if provided
+        let mut header_fields = Vec::new();
         for (key, value) in headers {
-            if key.to_lowercase() == "referer" {
-                cmd.arg(format!("--referrer={}", value));
-            } else {
-                cmd.arg(format!("--http-header-name={}: {}", key, value));
+            match key.to_lowercase().as_str() {
+                "referer" => {
+                    cmd.arg(format!("--referrer={}", value));
+                }
+                "user-agent" => {
+                    cmd.arg(format!("--user-agent={}", value));
+                }
+                _ => {
+                    header_fields.push(format!("{}: {}", key, value));
+                }
             }
+        }
+
+        if !header_fields.is_empty() {
+            cmd.arg(format!("--http-header-fields={}", header_fields.join(",")));
         }
 
         // Force media title
@@ -57,6 +68,10 @@ impl Player {
         // Force mpv to flush logs and be more verbose for debugging
         cmd.arg("--msg-level=all=v");
         cmd.arg("--msg-time");
+
+        // Force highest quality streaming
+        cmd.arg("--ytdl-format=bestvideo+bestaudio/best");
+        cmd.arg("--hls-bitrate=max");
 
         // Detach completely from parent process
         #[cfg(unix)]

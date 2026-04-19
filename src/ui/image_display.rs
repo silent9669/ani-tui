@@ -98,9 +98,9 @@ pub fn encode_iterm_image(image_data: &[u8], width: u32, height: u32) -> String 
     let cell_width = (width / 2).clamp(10, 80) as usize;
     let cell_height = height.clamp(5, 30) as usize;
 
-    // iTerm2 inline image protocol
+    // iTerm2 inline image protocol (\x1b]1337;)
     format!(
-        "\x1331337;File=name=image.png;size={};width={};height={};inline=1:{}\x07\x1b[?25l",
+        "\x1b]1337;File=name=image.png;size={};width={};height={};inline=1:{}\x07\x1b[?25l",
         image_data.len(),
         cell_width,
         cell_height,
@@ -121,7 +121,7 @@ pub fn clear_image() -> String {
     let protocol = detect_protocol();
     match protocol {
         ImageProtocol::Kitty => "\x1b_Ga=d\x1b\\".to_string(),
-        ImageProtocol::ITerm2 => "\x1331337;File=;\x07".to_string(),
+        ImageProtocol::ITerm2 => "\x1b]1337;File=;\x07".to_string(),
         ImageProtocol::None => String::new(),
     }
 }

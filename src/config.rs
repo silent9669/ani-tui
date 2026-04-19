@@ -7,10 +7,10 @@ use std::path::PathBuf;
 pub struct Config {
     #[serde(default)]
     pub sources: SourcesConfig,
-    
+
     #[serde(default)]
     pub prowlarr: Option<ProwlarrConfig>,
-    
+
     #[serde(default)]
     pub theme: ThemeConfig,
 }
@@ -19,9 +19,6 @@ pub struct Config {
 pub struct SourcesConfig {
     #[serde(default = "default_true")]
     pub allanime: bool,
-
-    #[serde(default = "default_true")]
-    pub aniwatch: bool,
 
     #[serde(default = "default_true")]
     pub kkphim: bool,
@@ -57,7 +54,6 @@ impl Default for SourcesConfig {
     fn default() -> Self {
         Self {
             allanime: true,
-            aniwatch: true,
             kkphim: true,
             ophim: true,
         }

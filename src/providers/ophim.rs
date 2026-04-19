@@ -67,6 +67,16 @@ impl AnimeProvider for OphimProvider {
 
         if let Some(data) = response.get("data") {
             if let Some(items) = data.get("items").and_then(|i| i.as_array()) {
+                let mut items = items.clone();
+                // Sort items to prioritize anime (type: "hoathinh")
+                items.sort_by(|a, b| {
+                    let a_type = a["type"].as_str().unwrap_or("");
+                    let b_type = b["type"].as_str().unwrap_or("");
+                    let a_priority = if a_type == "hoathinh" { 0 } else { 1 };
+                    let b_priority = if b_type == "hoathinh" { 0 } else { 1 };
+                    a_priority.cmp(&b_priority)
+                });
+
                 for item in items {
                     let slug = item["slug"].as_str().unwrap_or_default().to_string();
                     let name = item["name"].as_str().unwrap_or_default().to_string();
@@ -138,6 +148,7 @@ impl AnimeProvider for OphimProvider {
 
                                 if ep_num > 0 {
                                     episodes.push(Episode {
+                                        id: format!("{}:{}", anime_id, ep_num),
                                         number: ep_num,
                                         title: Some(
                                             ep["filename"].as_str().unwrap_or("").to_string(),
@@ -190,13 +201,25 @@ impl AnimeProvider for OphimProvider {
                     sorted_servers.sort_by(|a, b| {
                         let a_name = a["server_name"].as_str().unwrap_or("").to_lowercase();
                         let b_name = b["server_name"].as_str().unwrap_or("").to_lowercase();
-                        let a_priority = if a_name.contains("hà nội") || a_name.contains("vietsub") { 0 } else { 1 };
-                        let b_priority = if b_name.contains("hà nội") || b_name.contains("vietsub") { 0 } else { 1 };
+                        let a_priority = if a_name.contains("hà nội") || a_name.contains("vietsub")
+                        {
+                            0
+                        } else {
+                            1
+                        };
+                        let b_priority = if b_name.contains("hà nội") || b_name.contains("vietsub")
+                        {
+                            0
+                        } else {
+                            1
+                        };
                         a_priority.cmp(&b_priority)
                     });
 
                     'outer: for server in sorted_servers {
-                        if let Some(server_data) = server.get("server_data").and_then(|s| s.as_array()) {
+                        if let Some(server_data) =
+                            server.get("server_data").and_then(|s| s.as_array())
+                        {
                             for ep in server_data {
                                 let name = ep["name"].as_str().unwrap_or("");
                                 let ep_num = name.parse::<u32>().unwrap_or_else(|_| {
@@ -210,9 +233,21 @@ impl AnimeProvider for OphimProvider {
 
                                 if ep_num == search_num {
                                     if let Some(link) = ep["link_m3u8"].as_str() {
-                                        stream_url = link.to_string();
-                                    } else if let Some(link) = ep["link_embed"].as_str() {
-                                        stream_url = link.to_string();
+                                        if !link.is_empty() {
+                                            stream_url = link.to_string();
+                                        }
+                                    }
+
+                                    if stream_url.is_empty() {
+                                        if let Some(link) = ep["link_embed"].as_str() {
+                                            if link.contains("url=") {
+                                                if let Some(url_part) = link.split("url=").last() {
+                                                    stream_url = url_part.to_string();
+                                                }
+                                            } else {
+                                                stream_url = link.to_string();
+                                            }
+                                        }
                                     }
 
                                     subtitles.push(Subtitle {

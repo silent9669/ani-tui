@@ -303,9 +303,11 @@ impl AnimeProvider for AllAnimeProvider {
 
         if let Some(episode_list) = show["availableEpisodesDetail"]["sub"].as_array() {
             for (idx, ep) in episode_list.iter().enumerate() {
-                if let Some(ep_num) = ep.as_str() {
+                if let Some(ep_num_str) = ep.as_str() {
+                    let ep_number = ep_num_str.parse().unwrap_or((idx + 1) as u32);
                     episodes.push(Episode {
-                        number: ep_num.parse().unwrap_or((idx + 1) as u32),
+                        id: format!("{}:{}", anime_id, ep_num_str),
+                        number: ep_number,
                         title: None,
                         thumbnail: None,
                     });

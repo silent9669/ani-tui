@@ -9,7 +9,7 @@ A Netflix-inspired TUI (Terminal User Interface) for streaming anime.
 
 ## Features
 
-- 🎬 Stream anime and films from multiple sources (AllAnime, Gogoanime, KKPhim, NguonC, OPhim)
+- 🎬 Stream anime and films from multiple sources (AllAnime, AniWatch, KKPhim, OPhim)
 - 🌐 Multiple subtitle languages supported (English, Vietnamese)
 - 🔍 Search and browse anime catalog
 - 📺 Continue watching from where you left off
@@ -73,6 +73,7 @@ ani-tui --help
 | `Enter`   | Select        |
 | `Esc`     | Back          |
 | `Shift+S` | Change source |
+| `Shift+R` | View activity logs |
 | `q`       | Quit          |
 
 ## Supported Terminals
