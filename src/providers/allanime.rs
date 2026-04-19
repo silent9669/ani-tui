@@ -315,7 +315,7 @@ impl AnimeProvider for AllAnimeProvider {
             }
         }
 
-        episodes.sort_by(|a, b| a.number.cmp(&b.number));
+        episodes.sort_by_key(|a| a.number);
         Ok(episodes)
     }
 

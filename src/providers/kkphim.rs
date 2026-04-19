@@ -225,7 +225,7 @@ impl AnimeProvider for KkphimProvider {
         }
 
         let before_dedup = episodes.len();
-        episodes.sort_by(|a, b| a.number.cmp(&b.number));
+        episodes.sort_by_key(|a| a.number);
         episodes.dedup_by(|a, b| a.number == b.number);
         let after_dedup = episodes.len();
 

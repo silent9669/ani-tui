@@ -25,9 +25,6 @@ theme = "dark"
 # Enable AllAnime source (English subtitles)
 allanime = true
 
-# Enable AniWatch source (English subtitles)
-aniwatch = true
-
 # Enable KKPhim source (Vietnamese subtitles/dub)
 kkphim = true
 
