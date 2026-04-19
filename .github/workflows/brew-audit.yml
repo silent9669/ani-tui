@@ -22,9 +22,18 @@ jobs:
         run: |
           HOMEBREW_FORMULA_FALLBACK_BRANCH=master ruby scripts/generate-homebrew-formula.rb "v0.0.0-test" test-formula.rb
 
+      - name: Setup temporary tap
+        run: |
+          mkdir -p homebrew-tap/Formula
+          cp test-formula.rb homebrew-tap/Formula/ani-tui.rb
+          mkdir -p "$(brew --repository)/Library/Taps/silent9669"
+          rm -rf "$(brew --repository)/Library/Taps/silent9669/homebrew-tap"
+          ln -s "$(pwd)/homebrew-tap" "$(brew --repository)/Library/Taps/silent9669/homebrew-tap"
+          brew tap silent9669/tap
+
       - name: Run brew audit
         run: |
-          brew audit --strict --online test-formula.rb
+          HOMEBREW_NO_AUTO_UPDATE=1 brew audit --strict --online silent9669/tap/ani-tui
 
       - name: Check Ruby style
         run: |
@@ -32,4 +41,7 @@ jobs:
           rubocop --only Layout,Style packaging/homebrew/ani-tui.rb.template || true
 
       - name: Cleanup
-        run: rm -f test-formula.rb
+        run: |
+          rm -f test-formula.rb
+          brew untap silent9669/tap || true
+          rm -rf homebrew-tap
