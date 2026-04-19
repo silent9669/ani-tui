@@ -191,13 +191,11 @@ impl TerminalImage {
 impl Widget for TerminalImage {
     fn render(self, area: Rect, buf: &mut ratatui::buffer::Buffer) {
         if let Some(RenderOutput::Halfblocks(lines)) = self.output {
-            let mut y = area.y;
-            for line in lines {
+            for (y, line) in (area.y..).zip(lines) {
                 if y >= area.y + area.height {
                     break;
                 }
                 buf.set_line(area.x, y, &line, area.width);
-                y += 1;
             }
         }
     }

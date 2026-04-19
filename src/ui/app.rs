@@ -1612,12 +1612,11 @@ impl App {
                 KeyCode::Backspace => {
                     self.episode_filter.pop();
                 }
-                KeyCode::Char(c) => {
+                KeyCode::Char(c)
                     // Only accept numeric input for episode filtering
-                    if c.is_numeric() {
+                    if c.is_numeric() => {
                         self.episode_filter.push(c);
                     }
-                }
                 KeyCode::Enter => {
                     // Try to jump to episode number
                     if let Ok(ep_num) = self.episode_filter.parse::<u32>() {
@@ -1671,60 +1670,54 @@ impl App {
                     self.needs_continue_watching_refresh = true;
                 }
             }
-            KeyCode::Up => {
+            KeyCode::Up
                 // Move up one row (subtract columns)
-                if self.episode_selected_index >= cols {
+                if self.episode_selected_index >= cols => {
                     self.episode_selected_index -= cols;
                     // Update page to show selected episode
                     self.episode_current_page =
                         self.episode_selected_index / self.episodes_per_page;
                 }
-            }
-            KeyCode::Down => {
+            KeyCode::Down
                 // Move down one row (add columns)
-                if self.episode_selected_index + cols < total_episodes {
+                if self.episode_selected_index + cols < total_episodes => {
                     self.episode_selected_index += cols;
                     // Update page to show selected episode
                     self.episode_current_page =
                         self.episode_selected_index / self.episodes_per_page;
                 }
-            }
-            KeyCode::Left => {
+            KeyCode::Left
                 // Move left one column
-                if self.episode_selected_index > 0 {
+                if self.episode_selected_index > 0 => {
                     self.episode_selected_index -= 1;
                     // Update page to show selected episode
                     self.episode_current_page =
                         self.episode_selected_index / self.episodes_per_page;
                 }
-            }
-            KeyCode::Right => {
+            KeyCode::Right
                 // Move right one column
-                if self.episode_selected_index < total_episodes.saturating_sub(1) {
+                if self.episode_selected_index < total_episodes.saturating_sub(1) => {
                     self.episode_selected_index += 1;
                     // Update page to show selected episode
                     self.episode_current_page =
                         self.episode_selected_index / self.episodes_per_page;
                 }
-            }
-            KeyCode::PageUp => {
+            KeyCode::PageUp
                 // Go to previous page
-                if self.episode_current_page > 0 {
+                if self.episode_current_page > 0 => {
                     self.episode_current_page -= 1;
                     // Set selection to first episode of new page
                     self.episode_selected_index =
                         self.episode_current_page * self.episodes_per_page;
                 }
-            }
-            KeyCode::PageDown => {
+            KeyCode::PageDown
                 // Go to next page
-                if self.episode_current_page + 1 < total_pages {
+                if self.episode_current_page + 1 < total_pages => {
                     self.episode_current_page += 1;
                     // Set selection to first episode of new page
                     self.episode_selected_index =
                         self.episode_current_page * self.episodes_per_page;
                 }
-            }
             KeyCode::Home => {
                 // Go to first episode
                 self.episode_selected_index = 0;
@@ -1744,8 +1737,8 @@ impl App {
                 self.episode_filter.push(c);
                 self.episode_filter_mode = true;
             }
-            KeyCode::Enter => {
-                if self.episode_selected_index < total_episodes {
+            KeyCode::Enter
+                if self.episode_selected_index < total_episodes => {
                     let anime = self
                         .selected_anime
                         .as_ref()
@@ -1762,7 +1755,6 @@ impl App {
                         self.play_current_episode().await;
                     }
                 }
-            }
             _ => {}
         }
         Ok(())
@@ -1782,15 +1774,11 @@ impl App {
                 tracing::info!("Transitioning to Home screen");
                 self.current_screen = Screen::Home;
             }
-            KeyCode::Up => {
-                if self.selected_provider_idx > 0 {
-                    self.selected_provider_idx -= 1;
-                }
+            KeyCode::Up if self.selected_provider_idx > 0 => {
+                self.selected_provider_idx -= 1;
             }
-            KeyCode::Down => {
-                if self.selected_provider_idx + 1 < total_providers {
-                    self.selected_provider_idx += 1;
-                }
+            KeyCode::Down if self.selected_provider_idx + 1 < total_providers => {
+                self.selected_provider_idx += 1;
             }
             KeyCode::Enter => {
                 // Clear any existing images before transitioning
@@ -1820,12 +1808,11 @@ impl App {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('Q') => {
                 self.should_quit = true;
             }
-            KeyCode::Up => {
-                if self.continue_watching_selected > 0 {
+            KeyCode::Up
+                if self.continue_watching_selected > 0 => {
                     self.continue_watching_selected -= 1;
                     self.load_continue_watching_image().await;
                 }
-            }
             KeyCode::Down => {
                 let max_idx = self.continue_watching.len().saturating_sub(1);
                 if self.continue_watching_selected < max_idx {
@@ -1843,11 +1830,11 @@ impl App {
                     self.resume_watching(history).await?;
                 }
             }
-            KeyCode::Char('D') => {
+            KeyCode::Char('D')
                 // Remove from continue watching
                 if !self.continue_watching.is_empty()
                     && self.continue_watching_selected < self.continue_watching.len()
-                {
+                => {
                     let history = &self.continue_watching[self.continue_watching_selected];
                     let anime_id = history.anime_id.clone();
                     let title = history.title.clone();
@@ -1868,7 +1855,6 @@ impl App {
 
                     self.show_toast(format!("Removed '{}' from Continue Watching", title), 2);
                 }
-            }
             _ => {}
         }
         Ok(())
@@ -2154,13 +2140,11 @@ impl App {
                     self.search_pending = false;
                 }
             }
-            KeyCode::Left => {
-                if self.search_current_page > 0 {
-                    self.search_current_page -= 1;
-                    self.selected_index = self.search_current_page * self.search_items_per_page;
-                    self.last_selection_change = Instant::now();
-                    self.pending_selection_load = true;
-                }
+            KeyCode::Left if self.search_current_page > 0 => {
+                self.search_current_page -= 1;
+                self.selected_index = self.search_current_page * self.search_items_per_page;
+                self.last_selection_change = Instant::now();
+                self.pending_selection_load = true;
             }
             KeyCode::Right => {
                 let total_pages = self
@@ -2174,21 +2158,19 @@ impl App {
                     self.pending_selection_load = true;
                 }
             }
-            KeyCode::Up => {
-                if self.selected_index > 0 {
-                    self.selected_index -= 1;
-                    self.search_current_page = self.selected_index / self.search_items_per_page;
-                    self.last_selection_change = Instant::now();
-                    self.pending_selection_load = true;
-                }
+            KeyCode::Up if self.selected_index > 0 => {
+                self.selected_index -= 1;
+                self.search_current_page = self.selected_index / self.search_items_per_page;
+                self.last_selection_change = Instant::now();
+                self.pending_selection_load = true;
             }
-            KeyCode::Down => {
-                if self.selected_index < self.enriched_results.len().saturating_sub(1) {
-                    self.selected_index += 1;
-                    self.search_current_page = self.selected_index / self.search_items_per_page;
-                    self.last_selection_change = Instant::now();
-                    self.pending_selection_load = true;
-                }
+            KeyCode::Down
+                if self.selected_index < self.enriched_results.len().saturating_sub(1) =>
+            {
+                self.selected_index += 1;
+                self.search_current_page = self.selected_index / self.search_items_per_page;
+                self.last_selection_change = Instant::now();
+                self.pending_selection_load = true;
             }
             KeyCode::Enter => {
                 if let Some(anime) = self.enriched_results.get(self.selected_index).cloned() {
@@ -2212,25 +2194,17 @@ impl App {
             KeyCode::Esc => {
                 self.show_episode_list = false;
             }
-            KeyCode::Up => {
-                if self.episode_list_selected >= cols {
-                    self.episode_list_selected -= cols;
-                }
+            KeyCode::Up if self.episode_list_selected >= cols => {
+                self.episode_list_selected -= cols;
             }
-            KeyCode::Down => {
-                if self.episode_list_selected + cols < total_episodes {
-                    self.episode_list_selected += cols;
-                }
+            KeyCode::Down if self.episode_list_selected + cols < total_episodes => {
+                self.episode_list_selected += cols;
             }
-            KeyCode::Left => {
-                if self.episode_list_selected > 0 {
-                    self.episode_list_selected -= 1;
-                }
+            KeyCode::Left if self.episode_list_selected > 0 => {
+                self.episode_list_selected -= 1;
             }
-            KeyCode::Right => {
-                if self.episode_list_selected < total_episodes.saturating_sub(1) {
-                    self.episode_list_selected += 1;
-                }
+            KeyCode::Right if self.episode_list_selected < total_episodes.saturating_sub(1) => {
+                self.episode_list_selected += 1;
             }
             KeyCode::Enter => {
                 if self.episode_list_selected < total_episodes {
@@ -2271,15 +2245,11 @@ impl App {
                     KeyCode::Enter => {
                         self.execute_control_action().await;
                     }
-                    KeyCode::Char('n') => {
-                        if self.player_controller.play_next_episode() {
-                            self.play_current_episode().await;
-                        }
+                    KeyCode::Char('n') if self.player_controller.play_next_episode() => {
+                        self.play_current_episode().await;
                     }
-                    KeyCode::Char('p') => {
-                        if self.player_controller.play_previous_episode() {
-                            self.play_current_episode().await;
-                        }
+                    KeyCode::Char('p') if self.player_controller.play_previous_episode() => {
+                        self.play_current_episode().await;
                     }
                     KeyCode::Char('e') => {
                         self.previous_screen = Some(Screen::Player);
@@ -2352,15 +2322,11 @@ impl App {
                 self.source_modal_for_search = false;
                 self.show_source_modal = false;
             }
-            KeyCode::Up => {
-                if self.selected_provider_idx > 0 {
-                    self.selected_provider_idx -= 1;
-                }
+            KeyCode::Up if self.selected_provider_idx > 0 => {
+                self.selected_provider_idx -= 1;
             }
-            KeyCode::Down => {
-                if self.selected_provider_idx + 1 < total_providers {
-                    self.selected_provider_idx += 1;
-                }
+            KeyCode::Down if self.selected_provider_idx + 1 < total_providers => {
+                self.selected_provider_idx += 1;
             }
             KeyCode::Enter => {
                 self.show_source_modal = false;
