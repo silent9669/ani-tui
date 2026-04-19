@@ -1,3 +1,6 @@
+#![allow(clippy::collapsible_match)]
+#![allow(clippy::explicit_counter_loop)]
+
 #![allow(clippy::collapsible_if)]
 #![allow(clippy::collapsible_else_if)]
 #![allow(clippy::too_many_arguments)]
