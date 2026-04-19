@@ -1,11 +1,3 @@
-#![allow(clippy::collapsible_match)]
-#![allow(clippy::explicit_counter_loop)]
-
-#![allow(clippy::collapsible_if)]
-#![allow(clippy::collapsible_else_if)]
-#![allow(clippy::too_many_arguments)]
-#![allow(clippy::too_many_lines)]
-
 use ani_tui::config::Config;
 use ani_tui::ui::App;
 use ani_tui::update::{InstallMethod, UpdateChecker, CURRENT_VERSION};

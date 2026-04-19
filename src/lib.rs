@@ -1,6 +1,3 @@
-#![allow(clippy::collapsible_match)]
-#![allow(clippy::explicit_counter_loop)]
-
 pub mod config;
 pub mod db;
 pub mod image;

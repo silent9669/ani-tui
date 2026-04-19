@@ -14,14 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unified provider registry with stable English and Vietnamese sources.
 
 ### Removed
+- AniWatch source.
 - Unstable NguonC (VN) source.
 
 ## [3.7.9] - 2026-04-18
 
 ### Added
-- **AniWatch Restoration**: Restored AniWatch as a primary English source using the Rouge API.
 - **Real-time Log Tailing**: Optimized the Report screen to efficiently display the last 500 lines of system and player activity.
-- **Provider Registry Locking**: Enforced a balanced registry of exactly 2 English (AllAnime, AniWatch) and 2 Vietnamese (KKPhim, OPhim) sources.
 - **AES Decryption for AllAnime**: Restored AllAnime playback by implementing AES-256-CTR decryption for `tobeparsed` GraphQL responses.
 - **Smart Windows Installer**: New Rust-based installer for automated environment setup on Windows.
 
@@ -33,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Search Pagination**: Implemented 10 items per page with Left/Right or PgUp/PgDn navigation.
 
 ### Changed
-- **Default Source Configuration**: Enabled AllAnime, AniWatch, KKPhim, and OPhim by default.
+- **Default Source Configuration**: Enabled AllAnime, KKPhim, and OPhim by default.
 - **UI Aesthetics**: Standardized language flags (🇺🇸/🇻🇳); removed brackets and text labels for a cleaner, modern look.
 - **Config Refactor**: Simplified `Config::load` and centralized source management.
 

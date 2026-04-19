@@ -4,12 +4,12 @@ A Netflix-inspired TUI (Terminal User Interface) for streaming anime.
 
 ![Demo](demo1.gif)
 
-![Version](https://img.shields.io/badge/version-3.7.9-blue.svg)
+![Version](https://img.shields.io/badge/version-3.8.0-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)
 
 ## Features
 
-- 🎬 Stream anime and films from multiple sources (AllAnime, AniWatch, KKPhim, OPhim)
+- 🎬 Stream anime and films from multiple sources (AllAnime, KKPhim, OPhim)
 - 🌐 Multiple subtitle languages supported (English, Vietnamese)
 - 🔍 Search and browse anime catalog
 - 📺 Continue watching from where you left off
@@ -95,4 +95,3 @@ ani-tui --help
 ## License
 
 MIT License
-
