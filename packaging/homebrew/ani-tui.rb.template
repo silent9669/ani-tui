@@ -2,7 +2,9 @@ class AniTui < Formula
   desc "TUI for anime streaming"
   homepage "https://github.com/silent9669/ani-tui"
   url "<%= url %>"
+  <% unless url.include?(version_without_v) %>
   version "<%= version_without_v %>"
+  <% end %>
   sha256 "<%= sha256 %>"
   license "MIT"
   head "https://github.com/silent9669/ani-tui.git", branch: "main"

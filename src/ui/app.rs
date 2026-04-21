@@ -2246,12 +2246,14 @@ impl App {
                         self.execute_control_action().await;
                     }
                     KeyCode::Char('n') => {
-                        if self.player_controller.play_next_episode() {
+                        let play_next = self.player_controller.play_next_episode();
+                        if play_next {
                             self.play_current_episode().await;
                         }
                     }
                     KeyCode::Char('p') => {
-                        if self.player_controller.play_previous_episode() {
+                        let play_prev = self.player_controller.play_previous_episode();
+                        if play_prev {
                             self.play_current_episode().await;
                         }
                     }
