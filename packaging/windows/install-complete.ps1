@@ -162,11 +162,20 @@ if ($response -eq '' -or $response -match '^[yY]') {
         Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
         Write-Status "[OK] Extracted ani-tui" "Green"
     } catch {
-        Write-Status "✗ Failed to download ani-tui: $_" "Red"
+        Write-Status "[X] Failed to download ani-tui: $_" "Red"
         exit 1
     }
 } else {
     Write-Status "Skipping ani-tui download." "Yellow"
+}
+
+$binaryPath = Join-Path $InstallDir "ani-tui.exe"
+if (-not (Test-Path $binaryPath)) {
+    Write-Status ""
+    Write-Status "[X] Installation aborted: ani-tui.exe not found in $InstallDir" "Red"
+    Write-Status ""
+    Read-Host "Press Enter to exit"
+    exit 1
 }
 
 # Step 6: Set up PATH

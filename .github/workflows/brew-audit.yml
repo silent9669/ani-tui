@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'packaging/homebrew/**'
+      - 'scripts/generate-homebrew-formula.rb'
       - '.github/workflows/brew-audit.yml'
   workflow_dispatch:
 
@@ -41,6 +42,7 @@ jobs:
           rubocop --only Layout,Style packaging/homebrew/ani-tui.rb.template || true
 
       - name: Cleanup
+        if: always()
         run: |
           rm -f test-formula.rb
           brew untap silent9669/tap || true

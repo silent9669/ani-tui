@@ -2245,11 +2245,15 @@ impl App {
                     KeyCode::Enter => {
                         self.execute_control_action().await;
                     }
-                    KeyCode::Char('n') if self.player_controller.play_next_episode() => {
-                        self.play_current_episode().await;
+                    KeyCode::Char('n') => {
+                        if self.player_controller.play_next_episode() {
+                            self.play_current_episode().await;
+                        }
                     }
-                    KeyCode::Char('p') if self.player_controller.play_previous_episode() => {
-                        self.play_current_episode().await;
+                    KeyCode::Char('p') => {
+                        if self.player_controller.play_previous_episode() {
+                            self.play_current_episode().await;
+                        }
                     }
                     KeyCode::Char('e') => {
                         self.previous_screen = Some(Screen::Player);
