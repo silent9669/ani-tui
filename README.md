@@ -28,8 +28,10 @@ brew install ani-tui
 
 ### Windows
 
+We provide a fully interactive installer that sets up ani-tui and all its dependencies (including `mpv` and Visual C++ Redistributable).
+
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr -useb https://raw.githubusercontent.com/silent9669/ani-tui/master/packaging/windows/install-complete.ps1 | iex"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr -useb https://raw.githubusercontent.com/silent9669/ani-tui/master/packaging/windows/install-complete.ps1 | Invoke-Expression"
 ```
 
 ### Linux
