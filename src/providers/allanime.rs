@@ -407,6 +407,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires network"]
     async fn test_get_stream_url() {
         let provider = AllAnimeProvider::new();
         let res = provider.get_stream_url("2oXgpDPd3xKWdgnoz:1").await;
