@@ -138,17 +138,7 @@ impl AnimeProvider for OphimProvider {
                         {
                             for ep in server_data {
                                 let name = ep["name"].as_str().unwrap_or("");
-                                let mut ep_num = name.parse::<u32>().unwrap_or_else(|_| {
-                                    name.chars()
-                                        .filter(|c| c.is_ascii_digit())
-                                        .collect::<String>()
-                                        .parse::<u32>()
-                                        .unwrap_or(0)
-                                });
-
-                                if ep_num == 0 && name.to_lowercase() == "full" {
-                                    ep_num = 1;
-                                }
+                                let ep_num = super::parse_episode_number(name);
 
                                 if ep_num > 0 {
                                     episodes.push(Episode {
@@ -226,17 +216,7 @@ impl AnimeProvider for OphimProvider {
                         {
                             for ep in server_data {
                                 let name = ep["name"].as_str().unwrap_or("");
-                                let mut ep_num = name.parse::<u32>().unwrap_or_else(|_| {
-                                    name.chars()
-                                        .filter(|c| c.is_ascii_digit())
-                                        .collect::<String>()
-                                        .parse::<u32>()
-                                        .unwrap_or(0)
-                                });
-
-                                if ep_num == 0 && name.to_lowercase() == "full" {
-                                    ep_num = 1;
-                                }
+                                let ep_num = super::parse_episode_number(name);
                                 let search_num = episode_number.parse::<u32>().unwrap_or(0);
 
                                 if ep_num == search_num {
