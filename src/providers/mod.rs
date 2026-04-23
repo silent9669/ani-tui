@@ -130,3 +130,23 @@ impl ProviderRegistry {
         &self.providers
     }
 }
+
+pub fn parse_episode_number(name: &str) -> u32 {
+    let mut ep_num = name
+        .replace("Tập ", "")
+        .replace("Tap ", "")
+        .trim()
+        .parse::<u32>()
+        .unwrap_or_else(|_| {
+            name.chars()
+                .filter(|c| c.is_ascii_digit())
+                .collect::<String>()
+                .parse::<u32>()
+                .unwrap_or(0)
+        });
+
+    if ep_num == 0 && name.trim().eq_ignore_ascii_case("full") {
+        ep_num = 1;
+    }
+    ep_num
+}

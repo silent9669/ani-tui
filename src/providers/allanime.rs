@@ -48,26 +48,28 @@ impl AllAnimeProvider {
         let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encrypted)
             .context("Failed to decode base64 tobeparsed")?;
 
-        // Format: IV (12 bytes) + Ciphertext + Signature (16 bytes)
-        if decoded.len() < 28 {
+        // Format: 1-byte header/version tag + IV (12 bytes) + Ciphertext + Signature (16 bytes)
+        // Minimum length = 1 (header) + 12 (IV) + 16 (signature) = 29
+        if decoded.len() < 29 {
             anyhow::bail!("Encrypted data too short");
         }
 
-        // Key = Sha256("SimtVuagFbGR2K7P")
-        let secret = "SimtVuagFbGR2K7P";
+        // Key = Sha256("Xot36i3lK3:v1")
+        let secret = "Xot36i3lK3:v1";
         let mut hasher = Sha256::new();
         hasher.update(secret);
         let key = hasher.finalize();
 
-        // IV = first 12 bytes + counter "00000002"
-        let iv_bytes = &decoded[0..12];
+        // Skip the first byte (decoded[0])
+        // IV = bytes 1 to 13 (12 bytes) + counter "00000002"
+        let iv_bytes = &decoded[1..13];
         let mut iv = [0u8; 16];
         iv[0..12].copy_from_slice(iv_bytes);
         iv[15] = 2; // Counter starts at 2 as per ani-cli decode_tobeparsed logic
 
         // Ciphertext is after IV and before the last 16 bytes (signature)
         let ciphertext_end = decoded.len() - 16;
-        let ciphertext = &decoded[12..ciphertext_end];
+        let ciphertext = &decoded[13..ciphertext_end];
         let mut data = ciphertext.to_vec();
 
         type Aes256Ctr = ctr::Ctr128BE<aes::Aes256>;
@@ -404,5 +406,15 @@ mod tests {
         let encoded = "79677a7a78";
         let decoded = AllAnimeProvider::decode_provider_id(encoded);
         assert!(!decoded.is_empty());
+    }
+
+    #[test]
+    fn test_decrypt_tobeparsed() {
+        let encrypted_payload = "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";
+        let decrypted = AllAnimeProvider::decrypt_tobeparsed(encrypted_payload)
+            .expect("Should decrypt successfully");
+        assert!(decrypted.contains("sourceUrls"));
+        assert!(decrypted.contains("sourceUrl"));
+        assert!(decrypted.contains("Luf-Mp4"));
     }
 }
