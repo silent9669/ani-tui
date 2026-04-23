@@ -178,7 +178,7 @@ impl AnimeProvider for KkphimProvider {
                             for ep in server_data {
                                 // Parse Vietnamese episode name: "Tập 001" -> 1
                                 let name_str = ep["name"].as_str().unwrap_or("");
-                                let ep_number = name_str
+                                let mut ep_number = name_str
                                     .replace("Tập ", "")
                                     .replace("Tap ", "")
                                     .trim()
@@ -192,6 +192,11 @@ impl AnimeProvider for KkphimProvider {
                                             .parse::<u32>()
                                             .unwrap_or(0)
                                     });
+
+                                // Handle movies that have "Full" instead of episode number
+                                if ep_number == 0 && name_str.to_lowercase() == "full" {
+                                    ep_number = 1;
+                                }
 
                                 if ep_number > 0 {
                                     let ep_slug = ep["slug"].as_str().unwrap_or_default();
@@ -321,7 +326,7 @@ impl AnimeProvider for KkphimProvider {
                             for server_ep in server_data {
                                 let ep_name = server_ep["name"].as_str().unwrap_or("");
                                 // Parse Vietnamese episode name: "Tập 001" -> 1
-                                let ep_num = ep_name
+                                let mut ep_num = ep_name
                                     .replace("Tập ", "")
                                     .replace("Tap ", "")
                                     .trim()
@@ -334,6 +339,10 @@ impl AnimeProvider for KkphimProvider {
                                             .parse::<u32>()
                                             .unwrap_or(0)
                                     });
+
+                                if ep_num == 0 && ep_name.to_lowercase() == "full" {
+                                    ep_num = 1;
+                                }
                                 let search_num = episode_number.parse::<u32>().unwrap_or(0);
                                 tracing::debug!(
                                     "Comparing '{}' (parsed: {}) with '{}' (parsed: {})",

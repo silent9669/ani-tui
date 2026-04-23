@@ -1,6 +1,6 @@
 [package]
 name = "ani-tui"
-version = "3.8.0"
+version = "3.8.1"
 edition = "2021"
 authors = ["silent9669 <dev@silent9669.com>"]
 description = "Netflix-inspired TUI for anime streaming"
@@ -72,3 +72,6 @@ dialoguer = "0.11"
 opt-level = 3
 lto = true
 strip = true
+
+
+
