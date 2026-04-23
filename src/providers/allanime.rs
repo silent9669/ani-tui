@@ -49,25 +49,25 @@ impl AllAnimeProvider {
             .context("Failed to decode base64 tobeparsed")?;
 
         // Format: IV (12 bytes) + Ciphertext + Signature (16 bytes)
-        if decoded.len() < 28 {
+        if decoded.len() < 29 {
             anyhow::bail!("Encrypted data too short");
         }
 
-        // Key = Sha256("SimtVuagFbGR2K7P")
-        let secret = "SimtVuagFbGR2K7P";
+        // Key = Sha256("Xot36i3lK3:v1")
+        let secret = "Xot36i3lK3:v1";
         let mut hasher = Sha256::new();
         hasher.update(secret);
         let key = hasher.finalize();
 
-        // IV = first 12 bytes + counter "00000002"
-        let iv_bytes = &decoded[0..12];
+        // IV = bytes 1 to 13 (12 bytes) + counter "00000002"
+        let iv_bytes = &decoded[1..13];
         let mut iv = [0u8; 16];
         iv[0..12].copy_from_slice(iv_bytes);
         iv[15] = 2; // Counter starts at 2 as per ani-cli decode_tobeparsed logic
 
         // Ciphertext is after IV and before the last 16 bytes (signature)
         let ciphertext_end = decoded.len() - 16;
-        let ciphertext = &decoded[12..ciphertext_end];
+        let ciphertext = &decoded[13..ciphertext_end];
         let mut data = ciphertext.to_vec();
 
         type Aes256Ctr = ctr::Ctr128BE<aes::Aes256>;
@@ -404,5 +404,13 @@ mod tests {
         let encoded = "79677a7a78";
         let decoded = AllAnimeProvider::decode_provider_id(encoded);
         assert!(!decoded.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_stream_url() {
+        let provider = AllAnimeProvider::new();
+        let res = provider.get_stream_url("2oXgpDPd3xKWdgnoz:1").await;
+        println!("Result: {:?}", res);
+        assert!(res.is_ok());
     }
 }

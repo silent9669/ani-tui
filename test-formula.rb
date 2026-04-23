@@ -1,9 +1,8 @@
 class AniTui < Formula
   desc "TUI for anime streaming"
   homepage "https://github.com/silent9669/ani-tui"
-  url "https://github.com/silent9669/ani-tui/archive/refs/tags/v3.8.0.tar.gz"
-  
-  sha256 "02d34ae348fb678b2acf07a89c1ed98bf299502ce3a6711293dca19746f73948"
+  url "https://github.com/silent9669/ani-tui/archive/refs/tags/v3.8.1.tar.gz"
+  sha256 "9551d22e3b23aba79f5a44baf8c27495f591bf210053f92646e88ab5daae0bcd"
   license "MIT"
   head "https://github.com/silent9669/ani-tui.git", branch: "main"
 
