@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.2] - 2026-04-27
+- **AllAnime Decryption Fix**: Implemented a GraphQL GET request bypass using persisted queries to circumvent Cloudflare TLS fingerprinting issues.
+- **Homebrew Detection Refinement**: Improved `is_homebrew_install` logic to provide more accurate installation detection on macOS and avoid false positives in development environments.
+- **Project Configuration**: Cleaned up `.gitignore` and consolidated build settings.
+
 ## [3.8.1] - 2026-04-23
 ### Fixed
 - Updated AllAnime `tobeparsed` decryption key and byte offsets for `_m: b7`.

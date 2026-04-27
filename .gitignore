@@ -30,4 +30,8 @@ AGENTS.md
 
 daytona
 daytona.yaml
-\n# Ignore sensitive and temp directories\n.gemini/\n.obsidian/\nGEMINI.md\nani-cli-temp/\n
+# Ignore sensitive and temp directories
+.gemini/
+.obsidian/
+GEMINI.md
+ani-cli-temp/
