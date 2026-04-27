@@ -96,10 +96,12 @@ impl UpdateChecker {
 
         if let Ok(exe_path) = env::current_exe() {
             let homebrew_prefixes = [
-                "/opt/homebrew",
-                "/usr/local/Homebrew",
-                "/usr/local/Cellar",
-                "/home/linuxbrew/.linuxbrew",
+                "/opt/homebrew/bin/",
+                "/opt/homebrew/Cellar/",
+                "/usr/local/bin/",
+                "/usr/local/Cellar/",
+                "/home/linuxbrew/.linuxbrew/bin/",
+                "/home/linuxbrew/.linuxbrew/Cellar/",
             ];
             for prefix in homebrew_prefixes {
                 if exe_path.starts_with(prefix) {

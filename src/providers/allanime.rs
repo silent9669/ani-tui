@@ -330,7 +330,7 @@ impl AnimeProvider for AllAnimeProvider {
         let anime_id = parts[0];
         let episode_number = parts[1];
 
-        let embed_gql = r#"query($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) { episode(showId: $showId translationType: $translationType episodeString: $episodeString) { episodeString sourceUrls }}"#;
+        let query_hash = "d405d0edd690624b66baba3068e0edc3ac90f1597d898a1ec8db4e5c43c00fec";
 
         let variables = serde_json::json!({
             "showId": anime_id,
@@ -338,16 +338,77 @@ impl AnimeProvider for AllAnimeProvider {
             "episodeString": episode_number
         });
 
-        let response = self.graphql_query(embed_gql, variables).await?;
+        let extensions = serde_json::json!({
+            "persistedQuery": {
+                "version": 1,
+                "sha256Hash": query_hash
+            }
+        });
+
+        let encoded_vars = url::form_urlencoded::byte_serialize(variables.to_string().as_bytes())
+            .collect::<String>();
+        let encoded_ext = url::form_urlencoded::byte_serialize(extensions.to_string().as_bytes())
+            .collect::<String>();
+
+        let api_url = format!(
+            "{}?variables={}&extensions={}",
+            ALLANIME_API, encoded_vars, encoded_ext
+        );
+
+        let mut response_text = self
+            .client
+            .get(&api_url)
+            .header("Origin", "https://youtu-chan.com")
+            .send()
+            .await
+            .context("GET GraphQL request failed")?
+            .text()
+            .await
+            .context("Failed to get response text")?;
+
+        // Fallback to POST if GET fails to return tobeparsed (e.g. if the hash changes)
+        if !response_text.contains("tobeparsed") {
+            let embed_gql = r#"query($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) { episode(showId: $showId translationType: $translationType episodeString: $episodeString) { episodeString sourceUrls }}"#;
+
+            response_text = self
+                .client
+                .post(ALLANIME_API)
+                .header("Content-Type", "application/json")
+                .json(&serde_json::json!({
+                    "variables": variables,
+                    "query": embed_gql
+                }))
+                .send()
+                .await
+                .context("GraphQL POST fallback request failed")?
+                .text()
+                .await
+                .context("Failed to get POST response text")?;
+        }
+
+        let response: serde_json::Value = serde_json::from_str(&response_text)
+            .context("Failed to parse GraphQL response as JSON")?;
+
+        let mut final_json = response;
+
+        // Check if data is wrapped in tobeparsed
+        if let Some(data) = final_json.get("data") {
+            if let Some(tobeparsed) = data["tobeparsed"].as_str() {
+                let decrypted = Self::decrypt_tobeparsed(tobeparsed)?;
+                final_json =
+                    serde_json::from_str(&decrypted).context("Failed to parse decrypted JSON")?;
+            }
+        }
+
         let mut stream_url = String::new();
         let subtitles = Vec::new();
         let mut qualities = Vec::new();
         let mut headers = HashMap::new();
 
-        let episode = if let Some(data) = response.get("data") {
+        let episode = if let Some(data) = final_json.get("data") {
             &data["episode"]
         } else {
-            &response["episode"]
+            &final_json["episode"]
         };
 
         if let Some(source_urls) = episode["sourceUrls"].as_array() {
