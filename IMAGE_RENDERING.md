@@ -47,11 +47,38 @@ Cross-platform image preview for ani-tui using multiple terminal graphics protoc
 
 ## Common Issues & Solutions
 
+### Issue: Image Escapes Spill Outside the TUI on Linux Mint
+
+**Symptom:** Preview images draw over other panes, stack on top of each other, or appear outside the terminal UI when searching.
+**Cause:** Some Linux terminals do not safely support sixel graphics, even when `chafa` is installed and can generate sixel output.
+**Solution:** Unknown terminals now use the native Halfblocks renderer by default. This keeps image previews inside Ratatui's normal buffer and prevents protocol graphics from escaping the layout.
+
+Users with a known-compatible terminal can opt into a graphics protocol:
+
+```bash
+ANI_TUI_IMAGE_PROTOCOL=sixel ani-tui
+ANI_TUI_IMAGE_PROTOCOL=kitty ani-tui
+ANI_TUI_IMAGE_PROTOCOL=iterm2 ani-tui
+ANI_TUI_IMAGE_PROTOCOL=halfblocks ani-tui
+```
+
 ### Issue: Image Stacking/Layering
 
 **Symptom:** Multiple images visible when navigating quickly  
 **Cause:** iTerm2 images persist until overwritten  
 **Solution:** Clear area with spaces before each render
+
+### Issue: Duplicate/Misplaced Images in Kitty
+
+**Symptom:** The same preview appears twice, with one image offset outside the preview pane.
+**Cause:** Kitty action `a=T` transmits and displays immediately, and the renderer then sends `a=p` to place the same image again.
+**Solution:** Kitty now transmits image data with `a=t` and uses only the explicit `a=p` placement for display.
+
+### Issue: Portrait Posters Look Too Narrow
+
+**Symptom:** Anime posters fill the preview height but look compressed in width.
+**Cause:** Graphics protocol placements are sized in terminal cells, but terminal cells are taller than they are wide. Preserving image pixel aspect ratio directly in cell counts makes portrait images too skinny.
+**Solution:** Display sizing now converts image pixel aspect ratio into terminal-cell aspect ratio before calculating columns and rows.
 
 ### Issue: Dashboard Image in Search
 
@@ -166,6 +193,21 @@ Options researched:
 
 When modifying `src/ui/image_renderer.rs`, please document changes here before committing.
 Use the helper script: `./scripts/update-image-docs.sh`
+
+### v3.8.3 (2026-05-05)
+
+- Made Linux terminal image rendering safer by default
+  - What: Added `ANI_TUI_IMAGE_PROTOCOL` override and changed unknown terminals to use Halfblocks instead of automatically selecting sixel when `chafa` is installed
+  - Why: Linux Mint default terminals can display sixel output incorrectly, causing images to spill outside the TUI during search
+  - Impact: Mint users get stable in-pane image previews by default; compatible terminal users can still force sixel, Kitty, or iTerm2 rendering
+- Fixed duplicate/misplaced Kitty preview images
+  - What: Changed Kitty image transmission from `a=T` to `a=t`, keeping `a=p` as the only display action
+  - Why: `a=T` already displays the image, so using it before `a=p` created a second placement at the wrong cursor position
+  - Impact: Kitty users should see a single preview image inside the intended panel
+- Fixed skinny portrait poster sizing
+  - What: Adjusted display-size calculation to account for terminal cells being taller than they are wide
+  - Why: Pixel aspect ratio was being applied directly to terminal cell counts, compressing poster width
+  - Impact: Portrait covers render with a more natural width in Kitty/iTerm2 graphics placements
 
 **Template:**
 ```

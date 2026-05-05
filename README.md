@@ -67,6 +67,19 @@ ani-tui --update
 ani-tui --help
 ```
 
+### Linux Terminal Image Rendering
+
+On Linux terminals that do not safely support terminal graphics protocols, ani-tui uses native halfblock rendering so previews stay inside the TUI layout.
+
+To force a specific renderer:
+
+```bash
+ANI_TUI_IMAGE_PROTOCOL=halfblocks ani-tui
+ANI_TUI_IMAGE_PROTOCOL=sixel ani-tui
+ANI_TUI_IMAGE_PROTOCOL=kitty ani-tui
+ANI_TUI_IMAGE_PROTOCOL=iterm2 ani-tui
+```
+
 ## Key Bindings
 
 | Key       | Action        |
