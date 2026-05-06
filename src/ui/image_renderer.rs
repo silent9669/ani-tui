@@ -42,6 +42,18 @@ impl Protocol {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ProtocolDetectionContext<'a> {
+    term: &'a str,
+    term_program: &'a str,
+    warp_session: bool,
+    kitty_window_id: bool,
+    wt_session: bool,
+    wt_version: Option<&'a str>,
+    forced_protocol: Option<&'a str>,
+    chafa_available: bool,
+}
+
 /// Errors that can occur during image rendering
 #[derive(Debug)]
 pub enum ImageError {
@@ -293,28 +305,30 @@ impl ImageRenderer {
             wt_session
         );
 
-        Self::detect_protocol_from_env(
-            &term,
-            &term_program,
+        Self::detect_protocol_from_env(ProtocolDetectionContext {
+            term: &term,
+            term_program: &term_program,
             warp_session,
             kitty_window_id,
             wt_session,
-            wt_version.as_deref(),
-            forced_protocol.as_deref(),
-            Self::is_chafa_available(),
-        )
+            wt_version: wt_version.as_deref(),
+            forced_protocol: forced_protocol.as_deref(),
+            chafa_available: Self::is_chafa_available(),
+        })
     }
 
-    fn detect_protocol_from_env(
-        term: &str,
-        term_program: &str,
-        warp_session: bool,
-        kitty_window_id: bool,
-        wt_session: bool,
-        wt_version: Option<&str>,
-        forced_protocol: Option<&str>,
-        chafa_available: bool,
-    ) -> Protocol {
+    fn detect_protocol_from_env(ctx: ProtocolDetectionContext<'_>) -> Protocol {
+        let ProtocolDetectionContext {
+            term,
+            term_program,
+            warp_session,
+            kitty_window_id,
+            wt_session,
+            wt_version,
+            forced_protocol,
+            chafa_available,
+        } = ctx;
+
         if let Some(protocol) = forced_protocol {
             match protocol.trim().to_ascii_lowercase().as_str() {
                 "auto" | "" => {}
@@ -985,6 +999,19 @@ impl Default for ImageRenderer {
 mod tests {
     use super::*;
 
+    fn detection_context<'a>(term: &'a str, term_program: &'a str) -> ProtocolDetectionContext<'a> {
+        ProtocolDetectionContext {
+            term,
+            term_program,
+            warp_session: false,
+            kitty_window_id: false,
+            wt_session: false,
+            wt_version: None,
+            forced_protocol: None,
+            chafa_available: false,
+        }
+    }
+
     #[test]
     fn test_protocol_detection() {
         let renderer = ImageRenderer::new();
@@ -993,58 +1020,35 @@ mod tests {
 
     #[test]
     fn test_unknown_terminal_with_chafa_uses_halfblocks() {
-        let protocol = ImageRenderer::detect_protocol_from_env(
-            "xterm-256color",
-            "",
-            false,
-            false,
-            false,
-            None,
-            None,
-            true,
-        );
+        let protocol = ImageRenderer::detect_protocol_from_env(ProtocolDetectionContext {
+            chafa_available: true,
+            ..detection_context("xterm-256color", "")
+        });
 
         assert_eq!(protocol, Protocol::Halfblocks);
     }
 
     #[test]
     fn test_image_protocol_override_can_force_sixel() {
-        let protocol = ImageRenderer::detect_protocol_from_env(
-            "xterm-256color",
-            "",
-            false,
-            false,
-            false,
-            None,
-            Some("sixel"),
-            true,
-        );
+        let protocol = ImageRenderer::detect_protocol_from_env(ProtocolDetectionContext {
+            forced_protocol: Some("sixel"),
+            chafa_available: true,
+            ..detection_context("xterm-256color", "")
+        });
 
         assert_eq!(protocol, Protocol::Sixel);
     }
 
     #[test]
     fn test_macos_terminal_protocols_are_unchanged() {
-        let terminal_app = ImageRenderer::detect_protocol_from_env(
+        let terminal_app = ImageRenderer::detect_protocol_from_env(detection_context(
             "xterm-256color",
             "Apple_Terminal",
-            false,
-            false,
-            false,
-            None,
-            None,
-            true,
-        );
-        let iterm2 = ImageRenderer::detect_protocol_from_env(
+        ));
+        let iterm2 = ImageRenderer::detect_protocol_from_env(detection_context(
             "xterm-256color",
             "iTerm.app",
-            false,
-            false,
-            false,
-            None,
-            None,
-            true,
-        );
+        ));
 
         assert_eq!(terminal_app, Protocol::Halfblocks);
         assert_eq!(iterm2, Protocol::Iterm2);
@@ -1052,26 +1056,20 @@ mod tests {
 
     #[test]
     fn test_windows_terminal_protocols_are_unchanged() {
-        let modern_windows_terminal = ImageRenderer::detect_protocol_from_env(
-            "xterm-256color",
-            "",
-            false,
-            false,
-            true,
-            Some("1.22.10352.0"),
-            None,
-            true,
-        );
-        let older_windows_terminal = ImageRenderer::detect_protocol_from_env(
-            "xterm-256color",
-            "",
-            false,
-            false,
-            true,
-            Some("1.21.999.0"),
-            None,
-            true,
-        );
+        let modern_windows_terminal =
+            ImageRenderer::detect_protocol_from_env(ProtocolDetectionContext {
+                wt_session: true,
+                wt_version: Some("1.22.10352.0"),
+                chafa_available: true,
+                ..detection_context("xterm-256color", "")
+            });
+        let older_windows_terminal =
+            ImageRenderer::detect_protocol_from_env(ProtocolDetectionContext {
+                wt_session: true,
+                wt_version: Some("1.21.999.0"),
+                chafa_available: true,
+                ..detection_context("xterm-256color", "")
+            });
 
         assert_eq!(modern_windows_terminal, Protocol::Iterm2);
         assert_eq!(older_windows_terminal, Protocol::Halfblocks);
@@ -1079,16 +1077,8 @@ mod tests {
 
     #[test]
     fn test_rio_uses_kitty_protocol() {
-        let protocol = ImageRenderer::detect_protocol_from_env(
-            "xterm-256color",
-            "Rio",
-            false,
-            false,
-            false,
-            None,
-            None,
-            true,
-        );
+        let protocol =
+            ImageRenderer::detect_protocol_from_env(detection_context("xterm-256color", "Rio"));
 
         assert_eq!(protocol, Protocol::Kitty);
     }
