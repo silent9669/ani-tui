@@ -17,7 +17,8 @@ impl Player {
         headers: &HashMap<String, String>,
         start_time: Option<u64>,
     ) -> Result<()> {
-        let mut cmd = Command::new("mpv");
+        let player_command = Self::resolve_player_command()?;
+        let mut cmd = Command::new(&player_command);
 
         // Add video URL
         cmd.arg(video_url);
@@ -83,14 +84,84 @@ impl Player {
         // Spawn and forget - don't wait for it
         let _ = cmd
             .spawn()
-            .with_context(|| "Failed to start mpv. Is mpv installed?")?;
+            .with_context(|| format!("Failed to start {}. Is mpv installed?", player_command))?;
 
         Ok(())
+    }
+
+    fn resolve_player_command() -> Result<String> {
+        let env_player = std::env::var("ANI_TUI_PLAYER").ok();
+        Self::resolve_player_command_with(env_player.as_deref(), Self::command_exists)
+    }
+
+    fn resolve_player_command_with(
+        env_player: Option<&str>,
+        command_exists: impl Fn(&str) -> bool,
+    ) -> Result<String> {
+        if let Some(command) = env_player
+            .map(str::trim)
+            .filter(|command| !command.is_empty())
+        {
+            return Ok(command.to_string());
+        }
+        for command in ["mpv", "mpv.exe"] {
+            if command_exists(command) {
+                return Ok(command.to_string());
+            }
+        }
+
+        #[cfg(windows)]
+        anyhow::bail!(
+            "mpv was not found. Install it with `winget install mpv` or set ANI_TUI_PLAYER to the full mpv.exe path."
+        );
+
+        #[cfg(not(windows))]
+        anyhow::bail!("mpv was not found. Install mpv or set ANI_TUI_PLAYER to the player path.");
+    }
+
+    fn command_exists(command: &str) -> bool {
+        Command::new(command)
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
     }
 }
 
 impl Default for Player {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_player_prefers_env_override() {
+        let command = Player::resolve_player_command_with(Some("C:\\tools\\mpv.exe"), |_| false)
+            .expect("env override should be accepted");
+
+        assert_eq!(command, "C:\\tools\\mpv.exe");
+    }
+
+    #[test]
+    fn resolve_player_falls_back_to_mpv_exe() {
+        let command = Player::resolve_player_command_with(None, |candidate| candidate == "mpv.exe")
+            .expect("mpv.exe fallback should be accepted");
+
+        assert_eq!(command, "mpv.exe");
+    }
+
+    #[test]
+    fn resolve_player_errors_when_missing() {
+        let error = Player::resolve_player_command_with(None, |_| false)
+            .expect_err("missing player should error")
+            .to_string();
+
+        assert!(error.contains("mpv was not found"));
     }
 }
