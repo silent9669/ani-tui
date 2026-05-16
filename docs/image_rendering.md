@@ -1,8 +1,8 @@
 # Image Rendering in ani-tui
 
-ani-tui v3.7.4 supports image previews in the terminal using multiple graphics protocols. This document explains how image rendering works and which terminals are supported.
+ani-tui supports image previews in the terminal using multiple graphics protocols. This document explains how image rendering works and which terminals are supported.
 
-> **Note**: Image rendering is automatically detected and configured. No manual setup required.
+> **Note**: Image rendering is automatically detected and configured. Set `ANI_TUI_IMAGE_PROTOCOL=kitty|iterm2|sixel|halfblocks|auto` only when you want to override detection.
 
 ## Supported Protocols
 
@@ -17,7 +17,7 @@ ani-tui v3.7.4 supports image previews in the terminal using multiple graphics p
 ### 2. iTerm2 Inline Images Protocol
 **Widely supported, stateless**
 
-- **Supported terminals**: iTerm2, Warp, WezTerm, VSCode, Windows Terminal 1.22+
+- **Supported terminals**: iTerm2, Warp, VSCode
 - **Features**: Broad compatibility, no external dependencies
 - **Implementation**: OSC 1337 escape sequences with base64 data
 - **Sizing**: Uses character cells (not pixels) for consistent display across terminals
@@ -26,16 +26,16 @@ ani-tui v3.7.4 supports image previews in the terminal using multiple graphics p
 ### 3. Sixel Graphics
 **Fallback via chafa**
 
-- **Supported terminals**: Any terminal with chafa installed
+- **Supported terminals**: Known sixel terminals such as foot, mlterm, and contour, or any terminal when explicitly forced with `ANI_TUI_IMAGE_PROTOCOL=sixel`
 - **Features**: Works almost everywhere with chafa
 - **Implementation**: Converts images to Sixel format via external chafa process
 - **Requirements**: `chafa` must be installed
 
-### 4. None
-**No image support**
+### 4. Halfblocks
+**Stable in-buffer fallback**
 
-- **Fallback**: Terminal.app and unsupported terminals
-- **Behavior**: Shows text placeholder with helpful message
+- **Fallback**: Terminal.app, Windows Terminal, and unknown terminals
+- **Behavior**: Renders previews inside Ratatui's normal text buffer
 
 ## Protocol Detection
 
@@ -43,15 +43,16 @@ The renderer auto-detects the best protocol based on environment variables:
 
 ```rust
 Detection priority:
-1. Terminal.app (Apple_Terminal) → None
+1. Terminal.app (Apple_Terminal) → Halfblocks
 2. iTerm2 (iTerm.app) → iTerm2
 3. Warp (WarpTerminal/WARP_SESSION_ID) → iTerm2
-4. WezTerm (WezTerm) → iTerm2
+4. WezTerm (WezTerm) → Kitty
 5. Kitty (xterm-kitty/KITTY_WINDOW_ID) → Kitty
 6. Ghostty (Ghostty/ghostty) → Kitty
-7. Windows Terminal (WT_SESSION) → iTerm2 (v1.22+) or Sixel
-8. Fallback with chafa → Sixel
-9. No chafa → None
+7. Rio (Rio/rio) → Kitty
+8. Windows Terminal (WT_SESSION) → Halfblocks
+9. Known sixel terminals with chafa → Sixel
+10. Unknown terminals → Halfblocks
 ```
 
 ## Image Rendering Flow
@@ -80,10 +81,11 @@ BMP:  [0x42, 0x4D]
 
 ### Aspect Ratio Calculation
 ```rust
-// Maintains aspect ratio within available cell space
-aspect_ratio = img_width / img_height
+// Maintains visual aspect ratio within terminal cells
+pixel_aspect_ratio = img_width / img_height
+cell_aspect_ratio = pixel_aspect_ratio / 0.5
 cols = available_cols
-rows = cols / aspect_ratio
+rows = cols / cell_aspect_ratio
 // Clamp to available space
 ```
 
@@ -117,20 +119,21 @@ The `clear_terminal_graphics()` method writes spaces over the image area for iTe
 - **Terminal.app**: No image support (shows help message)
 
 ### Windows
-- **Windows Terminal 1.22+**: Native iTerm2 support
-- **Older versions**: Requires chafa for Sixel
-- **WezTerm**: Full iTerm2 support
+- **Kitty / WezTerm**: Recommended for normal image previews
+- **Windows Terminal**: Uses Halfblocks by default for stable rendering
+- **Override**: Use `ANI_TUI_IMAGE_PROTOCOL=iterm2` or `sixel` only if you have verified your terminal build handles it well
 
 ### Linux
 - **Kitty**: Best Kitty protocol support
-- **WezTerm**: Good iTerm2 support
-- **GNOME Terminal/Konsole**: Requires chafa
+- **WezTerm**: Uses Kitty protocol
+- **foot/mlterm/contour**: Sixel via chafa
+- **GNOME Terminal/Konsole/unknown terminals**: Halfblocks by default
 
 ## Troubleshooting
 
 ### Images not displaying
 1. Check terminal support (see Supported Terminals)
-2. Install chafa: `brew install chafa` / `scoop install chafa`
+2. Try `ANI_TUI_IMAGE_PROTOCOL=halfblocks ani-tui` for a stable fallback
 3. Verify image format is supported
 4. Try resizing terminal (minimum 10x5 cells needed)
 

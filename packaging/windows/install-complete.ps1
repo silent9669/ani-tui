@@ -44,8 +44,8 @@ Write-Status "Starting Installation..." "Cyan"
 Write-Status "========================================" "Cyan"
 Write-Status ""
 
-# Step 0: Check Windows Terminal Version
-Write-Status "Step 0: Checking Windows Terminal version..." "Yellow"
+# Step 0: Terminal image rendering guidance
+Write-Status "Step 0: Checking terminal image rendering guidance..." "Yellow"
 
 function Get-WindowsTerminalVersion {
     try {
@@ -64,23 +64,10 @@ function Get-WindowsTerminalVersion {
 $wtVersion = Get-WindowsTerminalVersion
 if ($wtVersion) {
     Write-Status "Windows Terminal version: $wtVersion" "Gray"
-    $versionParts = $wtVersion -split '\.'
-    $major = [int]$versionParts[0]
-    $minor = [int]$versionParts[1]
-    
-    if ($major -lt 1 -or ($major -eq 1 -and $minor -lt 22)) {
-        Write-Status "❌ Windows Terminal $wtVersion is too old" "Red"
-        Write-Status "⚠️  Windows Terminal 1.22+ is required for image previews" "Yellow"
-        Write-Status "Please upgrade Windows Terminal first: winget install --id Microsoft.WindowsTerminal -e" "Cyan"
-        
-        $continue = Read-Host "Continue without image support? (y/N)"
-        if ($continue -notmatch '^[yY]') { exit 1 }
-        Write-Status "⚠️  Continuing without image preview support" "Yellow"
-    } else {
-        Write-Status "[OK] Windows Terminal $wtVersion is supported" "Green"
-    }
+    Write-Status "ani-tui will use stable halfblock previews in Windows Terminal." "Gray"
+    Write-Status "For normal terminal images, Kitty or WezTerm are recommended." "Cyan"
 } else {
-    Write-Status "⚠️  Could not detect Windows Terminal version. Images may not work properly." "Yellow"
+    Write-Status "Could not detect Windows Terminal. Kitty or WezTerm are recommended for terminal images." "Yellow"
 }
 
 Write-Status ""

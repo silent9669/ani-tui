@@ -13,6 +13,7 @@ use std::process::{Command, Stdio};
 use std::time::Instant;
 
 const MIN_RENDER_INTERVAL_MS: u128 = 33;
+const TERMINAL_CELL_WIDTH_TO_HEIGHT: f32 = 0.5;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Protocol {
@@ -39,6 +40,18 @@ impl Protocol {
             Protocol::None => "None",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProtocolDetectionContext<'a> {
+    term: &'a str,
+    term_program: &'a str,
+    warp_session: bool,
+    kitty_window_id: bool,
+    wt_session: bool,
+    wt_version: Option<&'a str>,
+    forced_protocol: Option<&'a str>,
+    chafa_available: bool,
 }
 
 /// Errors that can occur during image rendering
@@ -98,7 +111,7 @@ impl ImageError {
                     ]),
                     Line::from(vec![
                         Span::raw("  Windows: "),
-                        Span::styled("Windows Terminal", Style::default().fg(Color::Green)),
+                        Span::styled("Kitty, WezTerm", Style::default().fg(Color::Green)),
                     ]),
                     Line::from(vec![
                         Span::raw("  Linux: "),
@@ -273,13 +286,15 @@ impl ImageRenderer {
     /// Protocol priority based on terminal compatibility research:
     /// - iTerm2 protocol: Widely supported (iTerm2, Warp, WezTerm, VSCode)
     /// - Kitty protocol: Best quality but limited support (Kitty, Ghostty)
-    /// - Sixel: Good fallback via chafa (Windows Terminal, foot, etc.)
+    /// - Sixel: Good fallback via chafa on known sixel terminals
     fn detect_protocol() -> Protocol {
         let term = std::env::var("TERM").unwrap_or_default();
         let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
         let warp_session = std::env::var("WARP_SESSION_ID").is_ok();
         let kitty_window_id = std::env::var("KITTY_WINDOW_ID").is_ok();
         let wt_session = std::env::var("WT_SESSION").is_ok();
+        let wt_version = std::env::var("WT_VERSION").ok();
+        let forced_protocol = std::env::var("ANI_TUI_IMAGE_PROTOCOL").ok();
 
         tracing::debug!(
             "Terminal detection - TERM: {}, TERM_PROGRAM: {}, WARP_SESSION: {}, KITTY_WINDOW_ID: {}, WT_SESSION: {}",
@@ -289,6 +304,62 @@ impl ImageRenderer {
             kitty_window_id,
             wt_session
         );
+
+        Self::detect_protocol_from_env(ProtocolDetectionContext {
+            term: &term,
+            term_program: &term_program,
+            warp_session,
+            kitty_window_id,
+            wt_session,
+            wt_version: wt_version.as_deref(),
+            forced_protocol: forced_protocol.as_deref(),
+            chafa_available: Self::is_chafa_available(),
+        })
+    }
+
+    fn detect_protocol_from_env(ctx: ProtocolDetectionContext<'_>) -> Protocol {
+        let ProtocolDetectionContext {
+            term,
+            term_program,
+            warp_session,
+            kitty_window_id,
+            wt_session,
+            wt_version,
+            forced_protocol,
+            chafa_available,
+        } = ctx;
+
+        if let Some(protocol) = forced_protocol {
+            match protocol.trim().to_ascii_lowercase().as_str() {
+                "" | "auto" => {}
+                "kitty" => {
+                    tracing::info!("Image protocol forced to Kitty");
+                    return Protocol::Kitty;
+                }
+                "iterm" | "iterm2" => {
+                    tracing::info!("Image protocol forced to iTerm2");
+                    return Protocol::Iterm2;
+                }
+                "sixel" | "sixels" => {
+                    if chafa_available {
+                        tracing::info!("Image protocol forced to Sixel");
+                        return Protocol::Sixel;
+                    }
+                    tracing::warn!("Sixel protocol requested but chafa is not available");
+                    return Protocol::Halfblocks;
+                }
+                "halfblock" | "halfblocks" | "native" => {
+                    tracing::info!("Image protocol forced to Halfblocks");
+                    return Protocol::Halfblocks;
+                }
+                unknown => {
+                    tracing::warn!(
+                        "Unknown ANI_TUI_IMAGE_PROTOCOL value '{}', using auto detection",
+                        unknown
+                    );
+                }
+            }
+        }
 
         // Native truecolor halfblocks are the most stable cross-platform solution
         // avoiding "image protocol problem of the terminal on both window and mac"
@@ -330,29 +401,38 @@ impl ImageRenderer {
             return Protocol::Kitty;
         }
 
-        // 7. Windows Terminal - Check for iTerm2 support or fallback to Halfblocks
-        if wt_session {
-            if let Ok(version) = std::env::var("WT_VERSION") {
-                if Self::is_windows_terminal_modern(&version) {
-                    tracing::info!(
-                        "Detected Windows Terminal {} - using iTerm2 protocol",
-                        version
-                    );
-                    return Protocol::Iterm2;
-                }
-            }
+        // 7. Rio - supports Kitty protocol
+        if term_program == "Rio" || term_program == "rio" {
+            tracing::info!("Detected Rio terminal - using Kitty protocol");
+            return Protocol::Kitty;
+        }
 
-            tracing::info!("Detected Windows Terminal - using Halfblocks fallback");
+        // 8. Windows Terminal - prefer the stable in-buffer renderer.
+        // Native graphics support varies enough that Kitty/WezTerm are better recommendations.
+        if wt_session {
+            if let Some(version) = wt_version {
+                tracing::info!(
+                    "Detected Windows Terminal {} - using Halfblocks fallback",
+                    version
+                );
+            } else {
+                tracing::info!("Detected Windows Terminal - using Halfblocks fallback");
+            }
             return Protocol::Halfblocks;
         }
 
-        // 8. Other terminals - use Sixel if available, else Halfblocks
-        if Self::is_chafa_available() {
-            tracing::info!("Using Sixel protocol via chafa as fallback");
+        // 9. Sixel is only safe when the terminal is explicitly known to support it.
+        let term_lower = term.to_ascii_lowercase();
+        if chafa_available
+            && (term_lower.contains("foot")
+                || term_lower.contains("mlterm")
+                || term_lower.contains("contour"))
+        {
+            tracing::info!("Detected sixel-capable terminal - using Sixel via chafa");
             return Protocol::Sixel;
         }
 
-        tracing::info!("Using Halfblocks fallback");
+        tracing::info!("Using Halfblocks fallback for unknown terminal");
         Protocol::Halfblocks
     }
 
@@ -365,18 +445,6 @@ impl ImageRenderer {
             .status()
             .map(|s| s.success())
             .unwrap_or(false)
-    }
-
-    /// Check if Windows Terminal version supports iTerm2 protocol (v1.22+)
-    fn is_windows_terminal_modern(version: &str) -> bool {
-        // Parse version like "1.22.10352.0"
-        let parts: Vec<&str> = version.split('.').collect();
-        if parts.len() >= 2 {
-            if let (Ok(major), Ok(minor)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
-                return major > 1 || (major == 1 && minor >= 22);
-            }
-        }
-        false
     }
 
     /// Render using Halfblocks (native terminal characters)
@@ -604,7 +672,8 @@ impl ImageRenderer {
         // q=2: suppress all responses to prevent breaking keyboard input
         sequences.push_str("\x1b_Ga=d,d=A,q=2\x1b\\");
 
-        // Send PNG data in chunks
+        // Send PNG data in chunks without displaying it yet. The explicit
+        // placement below is responsible for drawing at the calculated position.
         let base64_data = general_purpose::STANDARD.encode(&png_data);
         let chunk_size = 4096;
         let chunks: Vec<&str> = base64_data
@@ -619,7 +688,7 @@ impl ImageRenderer {
 
             let control = if is_first {
                 format!(
-                    "a=T,t=d,f=100,i={},m={},q=2",
+                    "a=t,t=d,f=100,i={},m={},q=2",
                     image_id,
                     if is_last { 0 } else { 1 }
                 )
@@ -787,7 +856,8 @@ impl ImageRenderer {
         max_cols: u32,
         max_rows: u32,
     ) -> (u32, u32) {
-        let aspect_ratio = img_width as f32 / img_height as f32;
+        let pixel_aspect_ratio = img_width as f32 / img_height as f32;
+        let cell_aspect_ratio = pixel_aspect_ratio / TERMINAL_CELL_WIDTH_TO_HEIGHT;
 
         // Use 100% of available space - maximize image size
         let available_cols = max_cols;
@@ -795,12 +865,12 @@ impl ImageRenderer {
 
         // Try to fit in max dimensions
         let mut cols = available_cols;
-        let mut rows = (cols as f32 / aspect_ratio) as u32;
+        let mut rows = (cols as f32 / cell_aspect_ratio).round() as u32;
 
         // If too tall, scale down
         if rows > available_rows {
             rows = available_rows;
-            cols = (rows as f32 * aspect_ratio) as u32;
+            cols = (rows as f32 * cell_aspect_ratio).round() as u32;
         }
 
         // Ensure minimum size but allow larger images
@@ -915,10 +985,69 @@ impl Default for ImageRenderer {
 mod tests {
     use super::*;
 
+    fn detection_context<'a>(term: &'a str, term_program: &'a str) -> ProtocolDetectionContext<'a> {
+        ProtocolDetectionContext {
+            term,
+            term_program,
+            warp_session: false,
+            kitty_window_id: false,
+            wt_session: false,
+            wt_version: None,
+            forced_protocol: None,
+            chafa_available: false,
+        }
+    }
+
     #[test]
     fn test_protocol_detection() {
         let renderer = ImageRenderer::new();
         let _ = renderer.protocol();
+    }
+
+    #[test]
+    fn test_windows_terminal_defaults_to_halfblocks() {
+        let protocol = ImageRenderer::detect_protocol_from_env(ProtocolDetectionContext {
+            wt_session: true,
+            wt_version: Some("1.22.10352.0"),
+            chafa_available: true,
+            ..detection_context("xterm-256color", "")
+        });
+
+        assert_eq!(protocol, Protocol::Halfblocks);
+    }
+
+    #[test]
+    fn test_known_terminals_use_graphics_protocols() {
+        let wezterm =
+            ImageRenderer::detect_protocol_from_env(detection_context("xterm-256color", "WezTerm"));
+        let kitty = ImageRenderer::detect_protocol_from_env(ProtocolDetectionContext {
+            kitty_window_id: true,
+            ..detection_context("xterm-256color", "")
+        });
+
+        assert_eq!(wezterm, Protocol::Kitty);
+        assert_eq!(kitty, Protocol::Kitty);
+    }
+
+    #[test]
+    fn test_image_protocol_override_can_force_sixel() {
+        let protocol = ImageRenderer::detect_protocol_from_env(ProtocolDetectionContext {
+            forced_protocol: Some("sixel"),
+            chafa_available: true,
+            ..detection_context("xterm-256color", "")
+        });
+
+        assert_eq!(protocol, Protocol::Sixel);
+    }
+
+    #[test]
+    fn test_unknown_terminal_with_chafa_uses_halfblocks() {
+        let protocol = ImageRenderer::detect_protocol_from_env(ProtocolDetectionContext {
+            chafa_available: true,
+            ..detection_context("xterm-256color", "")
+        });
+
+        assert_eq!(protocol, Protocol::Halfblocks);
     }
 
     #[test]
@@ -938,5 +1067,14 @@ mod tests {
         assert!(rows > 0);
         assert!(cols <= 34); // 40 - 6 for margins
         assert!(rows <= 14); // 20 - 6 for margins
+    }
+
+    #[test]
+    fn test_calculate_display_size_accounts_for_cell_aspect_ratio() {
+        let renderer = ImageRenderer::new();
+        let (cols, rows) = renderer.calculate_display_size(600, 900, 40, 20);
+
+        assert!(cols > 20);
+        assert!(rows <= 20);
     }
 }
