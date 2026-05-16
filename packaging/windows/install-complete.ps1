@@ -12,6 +12,15 @@ function Write-Status {
     Write-Host $Message -ForegroundColor $Color
 }
 
+function Show-Step {
+    param(
+        [int]$Percent,
+        [string]$Status
+    )
+    Write-Progress -Activity "ani-tui installer" -Status $Status -PercentComplete $Percent
+    Write-Status ("[{0,3}%] {1}" -f $Percent, $Status) "Cyan"
+}
+
 function Test-Command {
     param($Command)
     $null -ne (Get-Command $Command -ErrorAction SilentlyContinue)
@@ -28,24 +37,17 @@ function Show-AsciiBanner {
     Write-Host '| $$  | $$| $$ \  $$ /$$$$$$      | $$   |  $$$$$$/ /$$$$$$' -ForegroundColor Cyan
     Write-Host '|__/  |__/|__/  \__/|______/      |__/    \______/ |______/' -ForegroundColor Magenta
     Write-Host ''
-    
-    # Subtitle
-    Write-Host 'ani-tui 3.8.3 - Terminal UI for Anime Streaming' -ForegroundColor DarkGray
-    Write-Host ''
-    Write-Host 'Complete Installer for Windows' -ForegroundColor Cyan
+    Write-Host 'v3.8.3' -ForegroundColor DarkGray
     Write-Host ''
 }
 
 # Show ASCII banner
 Show-AsciiBanner
 
-Write-Status "========================================" "Cyan"
-Write-Status "Starting Installation..." "Cyan"
-Write-Status "========================================" "Cyan"
-Write-Status ""
+Show-Step 5 "Starting installation"
 
 # Step 0: Terminal image rendering guidance
-Write-Status "Step 0: Checking terminal image rendering guidance..." "Yellow"
+Show-Step 10 "Checking terminal image rendering guidance"
 
 function Get-WindowsTerminalVersion {
     try {
@@ -73,7 +75,7 @@ if ($wtVersion) {
 Write-Status ""
 
 # Step 1: Check/Install Visual C++ Redistributable
-Write-Status "Step 1: Checking Visual C++ Redistributable..." "Yellow"
+Show-Step 20 "Checking Visual C++ Redistributable"
 
 $vcInstalled = $false
 if (Test-Path "$env:SystemRoot\System32\vcruntime140.dll") {
@@ -93,13 +95,13 @@ if (-not $vcInstalled) {
 
 # Step 2: Create installation directory
 Write-Status ""
-Write-Status "Step 2: Creating installation directory..." "Yellow"
+Show-Step 35 "Creating installation directory"
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 Write-Status "[OK] Directory created: $InstallDir" "Green"
 
 # Step 3: Install mpv
 Write-Status ""
-Write-Status "Step 3: Installing mpv (REQUIRED for video playback)..." "Yellow"
+Show-Step 45 "Checking mpv"
 if (Test-Command "mpv") {
     Write-Status "[OK] mpv already installed" "Green"
 } else {
@@ -114,7 +116,7 @@ if (Test-Command "mpv") {
 
 # Step 4: Install chafa
 Write-Status ""
-Write-Status "Step 4: Installing chafa (for image previews)..." "Yellow"
+Show-Step 55 "Checking chafa"
 if (Test-Command "chafa") {
     Write-Status "[OK] chafa already installed" "Green"
 } else {
@@ -129,22 +131,21 @@ if (Test-Command "chafa") {
 
 # Step 5: Install ani-tui
 Write-Status ""
-Write-Status "Step 5: Installing ani-tui..." "Yellow"
+Show-Step 65 "Preparing ani-tui download"
 
 $response = Read-Host "Do you want to download and install ani-tui now? (Y/n)"
 if ($response -eq '' -or $response -match '^[yY]') {
-    Write-Status "Downloading ani-tui..." "Cyan"
     try {
         $releaseUrl = "https://github.com/silent9669/ani-tui/releases/latest/download/ani-tui-windows-x86_64.zip"
         $zipPath = "$env:TEMP\ani-tui-install.zip"
         
-        # Ensure progress bar is shown by un-suppressing progress preference temporarily
+        Show-Step 70 "Downloading ani-tui"
         $ProgressPreference = 'Continue'
         Invoke-WebRequest -Uri $releaseUrl -OutFile $zipPath -UseBasicParsing -ErrorAction Stop
         
         Write-Status "[OK] Download complete" "Green"
         
-        Write-Status "Extracting ani-tui..." "Gray"
+        Show-Step 82 "Extracting ani-tui"
         Expand-Archive -Path $zipPath -DestinationPath $InstallDir -Force
         Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
         Write-Status "[OK] Extracted ani-tui" "Green"
@@ -167,7 +168,7 @@ if (-not (Test-Path $binaryPath)) {
 
 # Step 6: Set up PATH
 Write-Status ""
-Write-Status "Step 6: Setting up PATH..." "Yellow"
+Show-Step 90 "Setting up PATH"
 
 $currentPath = [Environment]::GetEnvironmentVariable("PATH", "User")
 if ($currentPath -notlike "*$InstallDir*") {
@@ -180,7 +181,7 @@ $env:PATH = "$env:PATH;$InstallDir"
 
 # Step 7: Create wrapper script
 Write-Status ""
-Write-Status "Step 7: Creating shortcuts..." "Yellow"
+Show-Step 96 "Creating shortcuts"
 $wrapperPath = Join-Path $InstallDir "ani-tui.cmd"
 $wrapperContent = "@echo off`n`"%~dp0ani-tui.exe`" %*"
 Set-Content -Path $wrapperPath -Value $wrapperContent -Force
@@ -188,6 +189,8 @@ Write-Status "[OK] Created ani-tui.cmd" "Green"
 
 # Summary
 Write-Status ""
+Write-Progress -Activity "ani-tui installer" -Completed
+Show-Step 100 "Installation complete"
 Write-Status "========================================" "Green"
 Write-Status "Installation Complete!" "Green"
 Write-Status "========================================" "Green"

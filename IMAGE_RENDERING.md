@@ -4,8 +4,6 @@
 
 Cross-platform image preview for ani-tui using multiple terminal graphics protocols.
 
-Current release target: 3.8.3.
-
 ## Protocols Supported
 
 - **Kitty Graphics Protocol** - Best quality, requires explicit clearing
@@ -197,21 +195,6 @@ Options researched:
 
 When modifying `src/ui/image_renderer.rs`, please document changes here before committing.
 Use the helper script: `./scripts/update-image-docs.sh`
-
-### v3.8.3 (2026-05-16)
-
-- Made image protocol selection safer and configurable
-  - What: Added `ANI_TUI_IMAGE_PROTOCOL` and defaulted Windows Terminal/unknown terminals to Halfblocks
-  - Why: Windows Terminal and some Linux terminals can mishandle terminal graphics protocols
-  - Impact: Stable previews by default, with Kitty/WezTerm recommended for full image rendering
-- Fixed duplicate Kitty image placement
-  - What: Changed Kitty image transmission from `a=T` to `a=t`
-  - Why: `a=T` displayed immediately before explicit placement
-  - Impact: Kitty shows one preview in the intended pane
-- Fixed portrait poster sizing
-  - What: Adjusted display sizing for terminal-cell aspect ratio
-  - Why: Character cells are taller than they are wide
-  - Impact: Posters render with more natural proportions
 
 **Template:**
 ```

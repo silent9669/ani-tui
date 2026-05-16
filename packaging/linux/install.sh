@@ -1,99 +1,82 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Linux Installation Script for ani-tui
 # Usage: curl -fsSL https://raw.githubusercontent.com/silent9669/ani-tui/main/packaging/linux/install.sh | bash
 
-set -e
+set -euo pipefail
 
-echo "🎬 Installing ani-tui..."
+REPO="silent9669/ani-tui"
+INSTALL_DIR="/usr/local/bin"
+TEMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TEMP_DIR"' EXIT
 
-# Detect OS
-if [ -f /etc/os-release ]; then
-    . /etc/os-release
-    OS=$ID
-else
-    echo "❌ Cannot detect Linux distribution"
+show_banner() {
+    cat <<'BANNER'
+  /$$$$$$  /$$   /$$ /$$$$$$    /$$$$$$$$ /$$   /$$ /$$$$$$
+ /$$__  $$| $$$ | $$|_  $$_/   |__  $$__/| $$  | $$|_  $$_/
+| $$  \ $$| $$$$| $$  | $$        | $$   | $$  | $$  | $$
+| $$$$$$$$| $$ $$ $$  | $$ /$$$$$$| $$   | $$  | $$  | $$
+| $$__  $$| $$  $$$$  | $$|______/| $$   | $$  | $$  | $$
+| $$  | $$| $$\  $$$  | $$        | $$   | $$   | $$  | $$
+| $$  | $$| $$ \  $$ /$$$$$$      | $$   |  $$$$$$/ /$$$$$$
+|__/  |__/|__/  \__/|______/      |__/    \______/ |______/
+
+v3.8.3
+BANNER
+}
+
+status() {
+    printf '[ani-tui] %s\n' "$1"
+}
+
+require_command() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        printf 'Missing required command: %s\n' "$1" >&2
+        exit 1
+    fi
+}
+
+download() {
+    local url="$1"
+    local output="$2"
+    status "Downloading $(basename "$output")"
+    curl --fail --location --progress-bar --output "$output" "$url"
+}
+
+show_banner
+
+require_command curl
+require_command tar
+
+if ! command -v mpv >/dev/null 2>&1; then
+    status "mpv is required for playback. Install it with your package manager before watching videos."
+fi
+
+ARCH="$(uname -m)"
+if [ "$ARCH" != "x86_64" ]; then
+    printf 'Unsupported Linux architecture for prebuilt binary: %s\n' "$ARCH" >&2
     exit 1
 fi
 
-# Install dependencies
-echo "📦 Installing dependencies..."
-case $OS in
-    ubuntu|debian)
-        sudo apt-get update
-        sudo apt-get install -y chafa mpv curl
-        ;;
-    arch|manjaro)
-        sudo pacman -S --noconfirm chafa mpv curl
-        ;;
-    fedora)
-        sudo dnf install -y chafa mpv curl
-        ;;
-    *)
-        echo "⚠️  Unsupported distribution: $OS"
-        echo "   Please install chafa, mpv, and curl manually"
-        ;;
-esac
-
-# Download latest release
-REPO="silent9669/ani-tui"
-LATEST_RELEASE=$(curl -s "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-
-echo "⬇️  Downloading ani-tui ${LATEST_RELEASE}..."
-
-# Determine architecture
-ARCH=$(uname -m)
-if [ "$ARCH" = "x86_64" ]; then
-    ARCH="x86_64"
-else
-    echo "⚠️  Architecture $ARCH may not be fully supported"
-    echo "   Building from source instead..."
-    
-    # Check for Rust
-    if ! command -v cargo &> /dev/null; then
-        echo "❌ Rust is not installed. Please install Rust: https://rustup.rs/"
-        exit 1
-    fi
-    
-    # Clone and build
-    TEMP_DIR=$(mktemp -d)
-    git clone "https://github.com/${REPO}.git" "$TEMP_DIR"
-    cd "$TEMP_DIR"
-    cargo build --release
-    
-    sudo cp "target/release/ani-tui" "/usr/local/bin/ani-tui"
-    echo "✅ ani-tui built and installed successfully!"
-    exit 0
+LATEST_RELEASE="$(curl --fail --silent --location "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')"
+if [ -z "$LATEST_RELEASE" ]; then
+    printf 'Could not resolve latest ani-tui release.\n' >&2
+    exit 1
 fi
 
-BINARY_URL="https://github.com/${REPO}/releases/download/${LATEST_RELEASE}/ani-tui-linux-${ARCH}.tar.gz"
+ASSET="ani-tui-linux-x86_64.tar.gz"
+ARCHIVE_PATH="${TEMP_DIR}/${ASSET}"
+download "https://github.com/${REPO}/releases/download/${LATEST_RELEASE}/${ASSET}" "$ARCHIVE_PATH"
 
-# Create temporary directory
-TEMP_DIR=$(mktemp -d)
-trap "rm -rf $TEMP_DIR" EXIT
+status "Extracting ani-tui"
+tar -xzf "$ARCHIVE_PATH" -C "$TEMP_DIR"
+chmod +x "${TEMP_DIR}/ani-tui"
 
-# Download and extract
-curl -fsSL "$BINARY_URL" | tar -xz -C "$TEMP_DIR"
-
-# Install
-INSTALL_DIR="/usr/local/bin"
+status "Installing to ${INSTALL_DIR}"
 if [ ! -d "$INSTALL_DIR" ]; then
     sudo mkdir -p "$INSTALL_DIR"
 fi
-
-echo "🔧 Installing to ${INSTALL_DIR}..."
 sudo cp "${TEMP_DIR}/ani-tui" "${INSTALL_DIR}/ani-tui"
-sudo chmod +x "${INSTALL_DIR}/ani-tui"
 
-# Verify installation
-if command -v ani-tui &> /dev/null; then
-    echo "✅ ani-tui installed successfully!"
-    echo ""
-    echo "🚀 Usage:"
-    echo "   ani-tui              # Start the app"
-    echo "   ani-tui -q 'naruto'  # Search immediately"
-    echo ""
-    echo "📖 Run 'ani-tui --help' for more options"
-else
-    echo "❌ Installation failed. Please check your PATH."
-    exit 1
-fi
+status "Verifying installation"
+"${INSTALL_DIR}/ani-tui" --version
+status "Installation complete"
