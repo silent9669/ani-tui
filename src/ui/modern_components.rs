@@ -60,12 +60,9 @@ impl SplashScreen {
         frame.render_widget(banner, chunks[1]);
 
         let version_style = Style::default().fg(Color::DarkGray);
-        let version_text = Paragraph::new(format!(
-            "ani-tui v{} • AllAnime playback verified",
-            env!("CARGO_PKG_VERSION")
-        ))
-        .alignment(Alignment::Center)
-        .style(version_style);
+        let version_text = Paragraph::new(format!("ani-tui v{}", env!("CARGO_PKG_VERSION")))
+            .alignment(Alignment::Center)
+            .style(version_style);
         frame.render_widget(version_text, chunks[2]);
 
         let spinner = AsciiArt::loading_spinner(self.frame_count);

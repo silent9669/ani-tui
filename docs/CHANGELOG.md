@@ -5,15 +5,6 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.8.3] - 2026-05-16
-### Fixed
-- Restored local AllAnime playback by skipping dead mp4upload embed pages and falling through to playable provider streams.
-- Added stream candidate probing so AllAnime only returns media responses that mpv can play.
-- Improved mpv launch handling on macOS, Windows, and Linux by forcing a visible player window and reporting early player exits with recent mpv log context.
-
-### Changed
-- Updated the intro/version display and installer/readme version references to 3.8.3.
-
 ## [3.8.2] - 2026-04-27
 - **AllAnime Decryption Fix**: Implemented a GraphQL GET request bypass using persisted queries to circumvent Cloudflare TLS fingerprinting issues.
 - **Homebrew Detection Refinement**: Improved `is_homebrew_install` logic to provide more accurate installation detection on macOS and avoid false positives in development environments.

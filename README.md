@@ -10,7 +10,6 @@ A Netflix-inspired TUI (Terminal User Interface) for streaming anime.
 ## Features
 
 - 🎬 Stream anime and films from multiple sources (AllAnime, KKPhim, OPhim)
-- ▶️ Verified AllAnime playback through mpv on macOS and Windows builds
 - 🌐 Multiple subtitle languages supported (English, Vietnamese)
 - 🔍 Search and browse anime catalog
 - 📺 Continue watching from where you left off

@@ -2,8 +2,6 @@
 
 ani-tui supports image previews in the terminal using multiple graphics protocols. This document explains how image rendering works and which terminals are supported.
 
-Current app version: 3.8.3.
-
 > **Note**: Image rendering is automatically detected and configured. Set `ANI_TUI_IMAGE_PROTOCOL=kitty|iterm2|sixel|halfblocks|auto` only when you want to override detection.
 
 ## Supported Protocols
