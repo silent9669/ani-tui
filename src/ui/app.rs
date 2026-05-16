@@ -9,7 +9,7 @@ use crate::ui::image_renderer::ImageRenderer;
 use crate::ui::modern_components::{PreviewPanel, SearchOverlay, SplashScreen};
 use crate::ui::player_controller::{ControlAction, PlayerController, PlayerState};
 use crate::update::UpdateChecker;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
     execute,
@@ -139,6 +139,7 @@ pub struct App {
     // Search debounce
     search_pending: bool,
     search_worker: Option<tokio::task::JoinHandle<Result<Vec<crate::metadata::EnrichedAnime>>>>,
+    playback_worker: Option<tokio::task::JoinHandle<Result<String>>>,
     search_current_page: usize,
     search_items_per_page: usize,
     #[allow(dead_code)]
@@ -290,6 +291,7 @@ impl App {
             continue_watching_metadata: std::collections::HashMap::new(),
             search_pending: false,
             search_worker: None,
+            playback_worker: None,
             search_current_page: 0,
             search_items_per_page: 10,
             last_keypress: Instant::now(),
@@ -2662,32 +2664,41 @@ impl App {
             );
         });
 
-        // Spawn playback in background
-        tokio::spawn(async move {
+        let playback_title = anime.title.clone();
+        let playback_episode_number = episode.number;
+
+        // Resolve stream and launch playback in the background, then surface the result on tick.
+        self.playback_worker = Some(tokio::spawn(async move {
             let provider: Box<dyn AnimeProvider> = match provider_name.as_str() {
                 "AllAnime" => Box::new(crate::providers::allanime::AllAnimeProvider::new()),
                 "KKPhim" => Box::new(crate::providers::kkphim::KkphimProvider::new()),
                 "OPhim" => Box::new(crate::providers::ophim::OphimProvider::new()),
-                _ => return,
+                _ => anyhow::bail!("Provider {} is not available", provider_name),
             };
 
-            match provider.get_stream_url(&episode_id).await {
-                Ok(stream_info) => {
-                    if !stream_info.video_url.is_empty() {
-                        let player = Player::new();
-                        let _ = player.start_detached(
-                            &stream_info.video_url,
-                            &stream_info.subtitles,
-                            &stream_info.headers,
-                            None,
-                        );
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("Failed to get stream URL: {}", e);
-                }
+            let stream_info = provider
+                .get_stream_url(&episode_id)
+                .await
+                .with_context(|| format!("Failed to get stream URL from {}", provider_name))?;
+
+            if stream_info.video_url.is_empty() {
+                anyhow::bail!("{} returned an empty stream URL", provider_name);
             }
-        });
+
+            Player::new()
+                .start_detached(
+                    &stream_info.video_url,
+                    &stream_info.subtitles,
+                    &stream_info.headers,
+                    None,
+                )
+                .with_context(|| format!("Failed to launch player for {}", playback_title))?;
+
+            Ok(format!(
+                "Started: {} Ep {}",
+                playback_title, playback_episode_number
+            ))
+        }));
     }
 
     fn show_toast(&mut self, message: String, duration_secs: u64) {
@@ -2714,6 +2725,29 @@ impl App {
                         Err(e) => {
                             tracing::error!("Search worker failed: {}", e);
                             self.search_overlay.is_searching = false;
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(handle) = &mut self.playback_worker {
+            if handle.is_finished() {
+                if let Some(handle) = self.playback_worker.take() {
+                    match handle.await {
+                        Ok(Ok(message)) => {
+                            tracing::info!("{}", message);
+                            self.show_toast(message, 2);
+                        }
+                        Ok(Err(error)) => {
+                            tracing::error!("Playback failed: {:#}", error);
+                            self.log_action(&format!("Playback failed: {:#}", error));
+                            self.show_toast(format!("Playback failed: {}", error), 6);
+                        }
+                        Err(error) => {
+                            tracing::error!("Playback task failed: {}", error);
+                            self.log_action(&format!("Playback task failed: {}", error));
+                            self.show_toast("Playback task failed".to_string(), 6);
                         }
                     }
                 }
