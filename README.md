@@ -85,9 +85,11 @@ ani-tui --help
 | iTerm2 (macOS)         | ✅ Full       |
 | Kitty                  | ✅ Full       |
 | Warp                   | ✅ Full       |
-| Windows Terminal 1.22+ | ✅ Full       |
 | WezTerm                | ✅ Full       |
+| Windows Terminal       | ✅ Stable text image fallback |
 | Terminal.app           | ❌ Text only  |
+
+On Windows, Kitty or WezTerm are recommended for normal terminal image previews. Windows Terminal uses the stable halfblock fallback by default. You can force a renderer with `ANI_TUI_IMAGE_PROTOCOL=kitty|iterm2|sixel|halfblocks|auto`.
 
 ## Documentation
 

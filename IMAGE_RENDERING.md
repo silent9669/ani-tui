@@ -8,8 +8,8 @@ Cross-platform image preview for ani-tui using multiple terminal graphics protoc
 
 - **Kitty Graphics Protocol** - Best quality, requires explicit clearing
 - **iTerm2 Inline Images** - Widely supported (Warp, iTerm2, WezTerm), stateless
-- **Sixel (via chafa)** - Fallback for older terminals
-- **None** - Terminal.app has no support
+- **Sixel (via chafa)** - Optional for known sixel terminals
+- **Halfblocks** - Stable in-buffer fallback for Windows Terminal and unknown terminals
 
 ## Key Design Decisions
 
@@ -18,10 +18,21 @@ Cross-platform image preview for ani-tui using multiple terminal graphics protoc
 1. Terminal.app → None (no support)
 2. iTerm2 → iTerm2 protocol
 3. Warp → iTerm2 protocol (avoids Kitty corruption issues)
-4. WezTerm → iTerm2 protocol
+4. WezTerm → Kitty protocol
 5. Kitty → Kitty protocol
-6. Windows Terminal → Sixel
-7. Default → Sixel (chafa fallback)
+6. Windows Terminal → Halfblocks
+7. Known sixel terminals with chafa → Sixel
+8. Default → Halfblocks
+
+Users can override detection with:
+
+```bash
+ANI_TUI_IMAGE_PROTOCOL=auto ani-tui
+ANI_TUI_IMAGE_PROTOCOL=kitty ani-tui
+ANI_TUI_IMAGE_PROTOCOL=iterm2 ani-tui
+ANI_TUI_IMAGE_PROTOCOL=sixel ani-tui
+ANI_TUI_IMAGE_PROTOCOL=halfblocks ani-tui
+```
 
 ### Image Clearing Strategy
 
@@ -52,6 +63,24 @@ Cross-platform image preview for ani-tui using multiple terminal graphics protoc
 **Symptom:** Multiple images visible when navigating quickly  
 **Cause:** iTerm2 images persist until overwritten  
 **Solution:** Clear area with spaces before each render
+
+### Issue: Duplicate/Misplaced Images in Kitty
+
+**Symptom:** The same preview appears twice, with one copy offset outside the preview pane.  
+**Cause:** Kitty action `a=T` transmits and displays immediately, then ani-tui sent `a=p` to place the same image again.  
+**Solution:** Transmit with `a=t` and use only the explicit placement command to draw.
+
+### Issue: Windows Terminal Image Corruption
+
+**Symptom:** Images flicker, fail to clear, or render inconsistently in Windows Terminal.  
+**Cause:** Windows Terminal graphics support varies by version and environment.  
+**Solution:** Default to Halfblocks on Windows Terminal. Recommend Kitty or WezTerm for normal image previews, or use `ANI_TUI_IMAGE_PROTOCOL` to force a renderer after manual verification.
+
+### Issue: Portrait Posters Look Too Narrow
+
+**Symptom:** Anime posters fill the preview height but look compressed.  
+**Cause:** Image pixel aspect ratio was applied directly to terminal cells, but cells are taller than they are wide.  
+**Solution:** Convert pixel aspect ratio to terminal-cell aspect ratio before calculating preview dimensions.
 
 ### Issue: Dashboard Image in Search
 
@@ -166,6 +195,21 @@ Options researched:
 
 When modifying `src/ui/image_renderer.rs`, please document changes here before committing.
 Use the helper script: `./scripts/update-image-docs.sh`
+
+### v3.8.3 (2026-05-16)
+
+- Made image protocol selection safer and configurable
+  - What: Added `ANI_TUI_IMAGE_PROTOCOL` and defaulted Windows Terminal/unknown terminals to Halfblocks
+  - Why: Windows Terminal and some Linux terminals can mishandle terminal graphics protocols
+  - Impact: Stable previews by default, with Kitty/WezTerm recommended for full image rendering
+- Fixed duplicate Kitty image placement
+  - What: Changed Kitty image transmission from `a=T` to `a=t`
+  - Why: `a=T` displayed immediately before explicit placement
+  - Impact: Kitty shows one preview in the intended pane
+- Fixed portrait poster sizing
+  - What: Adjusted display sizing for terminal-cell aspect ratio
+  - Why: Character cells are taller than they are wide
+  - Impact: Posters render with more natural proportions
 
 **Template:**
 ```
