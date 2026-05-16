@@ -4,7 +4,7 @@ A Netflix-inspired TUI (Terminal User Interface) for streaming anime.
 
 ![Demo](demo1.gif)
 
-![Version](https://img.shields.io/badge/version-3.8.2-blue.svg)
+![Version](https://img.shields.io/badge/version-3.3.0-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)
 
 ## Features

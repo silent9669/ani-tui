@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 pub struct Player;
 
@@ -13,22 +14,75 @@ impl Player {
     pub fn start_detached(
         &self,
         video_url: &str,
-        _subtitles: &[crate::providers::Subtitle],
+        subtitles: &[crate::providers::Subtitle],
         headers: &HashMap<String, String>,
         start_time: Option<u64>,
     ) -> Result<()> {
         let player_command = Self::resolve_player_command()?;
-        let mut cmd = Command::new(&player_command);
 
-        // Add video URL
+        // Log to file for "Report" feature
+        let log_file = std::env::temp_dir().join("ani-tui-mpv.log");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_file)
+            .context("Failed to open mpv log file")?;
+
+        let mut cmd = Self::build_command(
+            &player_command,
+            video_url,
+            subtitles,
+            headers,
+            start_time,
+            Some(&log_file),
+        );
+        cmd.stdout(Stdio::from(file.try_clone()?));
+        cmd.stderr(Stdio::from(file));
+        cmd.stdin(Stdio::null());
+
+        // Detach completely from parent process
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0); // Create new process group
+        }
+
+        let mut child = cmd
+            .spawn()
+            .with_context(|| format!("Failed to start {}. Is mpv installed?", player_command))?;
+
+        std::thread::sleep(Duration::from_millis(1500));
+        if let Some(status) = child
+            .try_wait()
+            .context("Failed to check mpv startup status")?
+        {
+            let log_tail = Self::read_log_tail(&log_file, 40).unwrap_or_default();
+            let mut message = format!("mpv exited before playback could start ({})", status);
+            if !log_tail.trim().is_empty() {
+                message.push_str(&format!("\nRecent mpv log:\n{}", log_tail));
+            }
+            anyhow::bail!(message);
+        }
+
+        Ok(())
+    }
+
+    fn build_command(
+        player_command: &str,
+        video_url: &str,
+        subtitles: &[crate::providers::Subtitle],
+        headers: &HashMap<String, String>,
+        start_time: Option<u64>,
+        log_file: Option<&std::path::Path>,
+    ) -> Command {
+        let mut cmd = Command::new(player_command);
+
         cmd.arg(video_url);
 
-        // Add start time if provided
         if let Some(start) = start_time {
             cmd.arg(format!("--start={}", start));
         }
 
-        // Add headers if provided
         let mut header_fields = Vec::new();
         for (key, value) in headers {
             match key.to_lowercase().as_str() {
@@ -48,45 +102,32 @@ impl Player {
             cmd.arg(format!("--http-header-fields={}", header_fields.join(",")));
         }
 
-        // Force media title
+        for subtitle in subtitles {
+            if !subtitle.url.trim().is_empty() {
+                cmd.arg(format!("--sub-file={}", subtitle.url));
+            }
+        }
+
         cmd.arg("--force-media-title=ani-tui");
-
-        // Don't exit immediately on error
+        cmd.arg("--force-window=immediate");
         cmd.arg("--keep-open=no");
-
-        // Log to file for "Report" feature
-        let log_file = std::env::temp_dir().join("ani-tui-mpv.log");
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_file)
-            .context("Failed to open mpv log file")?;
-
-        cmd.stdout(Stdio::from(file.try_clone()?));
-        cmd.stderr(Stdio::from(file));
-        cmd.stdin(Stdio::null());
-
-        // Force mpv to flush logs and be more verbose for debugging
         cmd.arg("--msg-level=all=v");
         cmd.arg("--msg-time");
-
-        // Force highest quality streaming
         cmd.arg("--ytdl-format=bestvideo+bestaudio/best");
         cmd.arg("--hls-bitrate=max");
 
-        // Detach completely from parent process
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            cmd.process_group(0); // Create new process group
+        if let Some(log_file) = log_file {
+            cmd.arg(format!("--log-file={}", log_file.display()));
         }
 
-        // Spawn and forget - don't wait for it
-        let _ = cmd
-            .spawn()
-            .with_context(|| format!("Failed to start {}. Is mpv installed?", player_command))?;
+        cmd
+    }
 
-        Ok(())
+    fn read_log_tail(path: &std::path::Path, max_lines: usize) -> Result<String> {
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read mpv log at {}", path.display()))?;
+        let lines: Vec<&str> = content.lines().rev().take(max_lines).collect();
+        Ok(lines.into_iter().rev().collect::<Vec<_>>().join("\n"))
     }
 
     fn resolve_player_command() -> Result<String> {

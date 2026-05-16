@@ -590,6 +590,8 @@ impl AllAnimeProvider {
                     Vec::new(),
                 ));
             }
+
+            anyhow::bail!("mp4upload embed page did not expose a playable mp4 URL");
         }
 
         if url.contains(".m3u8") {
@@ -707,6 +709,58 @@ impl AllAnimeProvider {
                 .await
         } else {
             Ok((Vec::new(), Vec::new()))
+        }
+    }
+
+    async fn candidate_is_playable(&self, candidate: &StreamCandidate) -> bool {
+        let mut request = self.client.get(&candidate.url);
+        if let Some(referrer) = candidate.headers.get("Referer") {
+            request = request.header(header::REFERER, referrer);
+        }
+        if let Some(user_agent) = candidate.headers.get("User-Agent") {
+            request = request.header(header::USER_AGENT, user_agent);
+        }
+        if !candidate.url.contains(".m3u8") {
+            request = request.header(header::RANGE, "bytes=0-0");
+        }
+
+        match request.send().await {
+            Ok(response)
+                if response.status().is_success() || response.status().is_redirection() =>
+            {
+                let content_type = response
+                    .headers()
+                    .get(header::CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+
+                if content_type.contains("text/html") {
+                    tracing::warn!(
+                        "AllAnime candidate probe resolved to HTML instead of media: {}",
+                        candidate.url
+                    );
+                    return false;
+                }
+
+                true
+            }
+            Ok(response) => {
+                tracing::warn!(
+                    "AllAnime candidate failed probe with status {}: {}",
+                    response.status(),
+                    candidate.url
+                );
+                false
+            }
+            Err(err) => {
+                tracing::warn!(
+                    "AllAnime candidate probe failed: {}: {}",
+                    candidate.url,
+                    err
+                );
+                false
+            }
         }
     }
 }
@@ -894,7 +948,7 @@ impl AnimeProvider for AllAnimeProvider {
         };
 
         let mut subtitles = Vec::new();
-        let mut candidates = Vec::new();
+        let mut selected_candidate = None;
 
         let episode = if let Some(data) = final_json.get("data") {
             &data["episode"]
@@ -919,9 +973,17 @@ impl AnimeProvider for AllAnimeProvider {
                 if let Some(source_url) = source["sourceUrl"].as_str() {
                     match self.resolve_source_url(source_url, priority_name).await {
                         Ok((mut resolved, mut resolved_subtitles)) => {
-                            candidates.append(&mut resolved);
                             subtitles.append(&mut resolved_subtitles);
-                            if !candidates.is_empty() {
+                            while let Some(candidate) = Self::best_candidate(resolved.clone()) {
+                                if self.candidate_is_playable(&candidate).await {
+                                    selected_candidate = Some(candidate);
+                                    break;
+                                }
+
+                                resolved.retain(|item| item.url != candidate.url);
+                            }
+
+                            if selected_candidate.is_some() {
                                 break;
                             }
                         }
@@ -939,7 +1001,7 @@ impl AnimeProvider for AllAnimeProvider {
             }
         }
 
-        let Some(candidate) = Self::best_candidate(candidates) else {
+        let Some(candidate) = selected_candidate else {
             anyhow::bail!(
                 "No working stream URL found. This might be a temporary issue with AllAnime."
             );
@@ -1118,6 +1180,40 @@ https://cdn.example/720/index.m3u8
             .await
             .expect("stream should resolve");
 
+        eprintln!("AllAnime live stream URL: {}", stream.video_url);
+        eprintln!("AllAnime live headers: {:?}", stream.headers);
         assert!(stream.video_url.starts_with("http"));
+    }
+
+    #[tokio::test]
+    #[ignore = "opens mpv; run with ANI_TUI_LIVE_PLAYBACK=1"]
+    async fn live_allanime_mpv_playback_smoke() {
+        if std::env::var("ANI_TUI_LIVE_PLAYBACK").ok().as_deref() != Some("1") {
+            return;
+        }
+
+        let provider = AllAnimeProvider::new();
+        let anime = provider
+            .search("one piece")
+            .await
+            .expect("search should work")
+            .into_iter()
+            .next()
+            .expect("search should return at least one anime");
+        let episode = provider
+            .get_episodes(&anime.id)
+            .await
+            .expect("episodes should load")
+            .into_iter()
+            .next()
+            .expect("at least one episode should exist");
+        let stream = provider
+            .get_stream_url(&episode.id)
+            .await
+            .expect("stream should resolve");
+
+        crate::player::Player::new()
+            .start_detached(&stream.video_url, &stream.subtitles, &stream.headers, None)
+            .expect("mpv should launch and stay alive long enough to begin playback");
     }
 }
