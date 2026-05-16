@@ -23,7 +23,7 @@ impl AsciiArt {
     }
 
     pub fn subtitle() -> &'static str {
-        "ani-tui 3.3 - Terminal UI for Anime Streaming"
+        "ani-tui 3.8.3 - Terminal UI for Anime Streaming"
     }
 
     pub fn render_banner_colored() -> Vec<Line<'static>> {

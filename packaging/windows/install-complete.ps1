@@ -30,7 +30,7 @@ function Show-AsciiBanner {
     Write-Host ''
     
     # Subtitle
-    Write-Host 'ani-tui 3.3 - Terminal UI for Anime Streaming' -ForegroundColor DarkGray
+    Write-Host 'ani-tui 3.8.3 - Terminal UI for Anime Streaming' -ForegroundColor DarkGray
     Write-Host ''
     Write-Host 'Complete Installer for Windows' -ForegroundColor Cyan
     Write-Host ''

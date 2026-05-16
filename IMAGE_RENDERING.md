@@ -4,6 +4,8 @@
 
 Cross-platform image preview for ani-tui using multiple terminal graphics protocols.
 
+Current release target: 3.8.3.
+
 ## Protocols Supported
 
 - **Kitty Graphics Protocol** - Best quality, requires explicit clearing

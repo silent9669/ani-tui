@@ -61,7 +61,7 @@ impl SplashScreen {
 
         let version_style = Style::default().fg(Color::DarkGray);
         let version_text = Paragraph::new(format!(
-            "ani-tui v{} • AllAnime playback recovery",
+            "ani-tui v{} • AllAnime playback verified",
             env!("CARGO_PKG_VERSION")
         ))
         .alignment(Alignment::Center)
