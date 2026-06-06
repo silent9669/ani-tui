@@ -4,7 +4,7 @@ A Netflix-inspired TUI (Terminal User Interface) for streaming anime.
 
 ![Demo](demo1.gif)
 
-![Version](https://img.shields.io/badge/version-3.8.3-blue.svg)
+![Version](https://img.shields.io/badge/version-3.8.4-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)
 
 ## Features
@@ -28,10 +28,10 @@ brew install ani-tui
 
 ### Windows
 
-We provide a fully interactive installer that sets up ani-tui and all its dependencies (including `mpv` and Visual C++ Redistributable).
+We provide a single PowerShell installer that sets up ani-tui, verifies `mpv`, and configures `ANI_TUI_PLAYER` for reliable playback.
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr -useb https://github.com/silent9669/ani-tui/releases/latest/download/install-complete.ps1 -OutFile install.ps1; .\install.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr -useb https://github.com/silent9669/ani-tui/releases/latest/download/install.ps1 -OutFile install.ps1; .\install.ps1"
 ```
 
 ### Linux
@@ -44,7 +44,7 @@ curl -fsSL https://raw.githubusercontent.com/silent9669/ani-tui/master/packaging
 
 - **mpv** - Required for video playback
   - macOS: `brew install mpv`
-  - Windows: Included in auto-installer
+  - Windows: installed or configured by the PowerShell installer
   - Linux: `sudo apt install mpv`
 
 - **chafa** (optional) - For image previews in unsupported terminals

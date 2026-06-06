@@ -1,85 +1,117 @@
-# ani-tui Diagnostic Tool for Windows
-# Run this if ani-tui command is not found
+# ani-tui Windows diagnostic tool
 
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "ani-tui Diagnostic Tool" -ForegroundColor Cyan
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host ""
+[CmdletBinding()]
+param(
+    [string]$InstallDir = "$env:LOCALAPPDATA\ani-tui"
+)
 
-# Check if ani-tui is in PATH
-Write-Host "Checking PATH..." -ForegroundColor Yellow
-$aniTuiCmd = Get-Command ani-tui -ErrorAction SilentlyContinue
-if ($aniTuiCmd) {
-    Write-Host "✓ ani-tui found in PATH at: $($aniTuiCmd.Source)" -ForegroundColor Green
-} else {
-    Write-Host "✗ ani-tui NOT found in PATH" -ForegroundColor Red
-    Write-Host ""
-    Write-Host "Possible solutions:" -ForegroundColor Cyan
-    Write-Host "  1. Open a NEW terminal window (PATH changes require fresh session)"
-    Write-Host "  2. Run the full path instead:"
-    Write-Host "     %LOCALAPPDATA%\ani-tui\ani-tui.exe"
-    Write-Host "  3. Reinstall using the installer"
+$ErrorActionPreference = "Continue"
+
+function Write-Status {
+    param(
+        [string]$Message,
+        [string]$Color = "White"
+    )
+    Write-Host $Message -ForegroundColor $Color
 }
 
-# Check installation directory
-Write-Host ""
-Write-Host "Checking installation..." -ForegroundColor Yellow
-$installDir = "$env:LOCALAPPDATA\ani-tui"
-$binaryPath = Join-Path $installDir "ani-tui.exe"
+function Test-VersionCommand {
+    param([string]$Path)
 
-if (Test-Path $binaryPath) {
-    Write-Host "✓ Binary found at: $binaryPath" -ForegroundColor Green
-    
-    # Try to get version
-    try {
-        $version = & $binaryPath --version 2>&1
-        Write-Host "✓ Binary is executable. Version: $version" -ForegroundColor Green
-    } catch {
-        Write-Host "✗ Binary exists but cannot run. Error: $_" -ForegroundColor Red
+    if (-not $Path) {
+        return $false
     }
-} else {
-    Write-Host "✗ Binary NOT found at: $binaryPath" -ForegroundColor Red
-    Write-Host "  ani-tui may not be installed correctly." -ForegroundColor Yellow
+
+    try {
+        $output = & $Path --version 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Status "  [FAIL] $Path exited with $LASTEXITCODE" "Red"
+            return $false
+        }
+        Write-Status "  [OK] $Path" "Green"
+        if ($output) {
+            Write-Status "       $($output | Select-Object -First 1)" "DarkGray"
+        }
+        return $true
+    } catch {
+        Write-Status "  [FAIL] $Path - $_" "Red"
+        return $false
+    }
 }
 
-# Check dependencies
-Write-Host ""
-Write-Host "Checking dependencies..." -ForegroundColor Yellow
+Write-Status "========================================" "Cyan"
+Write-Status "ani-tui Windows diagnostics" "Cyan"
+Write-Status "========================================" "Cyan"
+Write-Status "Install directory: $InstallDir"
+Write-Status ""
 
-$mpv = Get-Command mpv -ErrorAction SilentlyContinue
-if ($mpv) {
-    Write-Host "✓ mpv found at: $($mpv.Source)" -ForegroundColor Green
+$binaryPath = Join-Path $InstallDir "ani-tui.exe"
+Write-Status "ani-tui binary:" "Yellow"
+if (Test-Path $binaryPath) {
+    Test-VersionCommand $binaryPath | Out-Null
 } else {
-    Write-Host "✗ mpv NOT found" -ForegroundColor Red
-    Write-Host "  Video playback will NOT work without mpv!" -ForegroundColor Yellow
-    Write-Host "  Download from: https://mpv.io/installation/" -ForegroundColor Cyan
+    Write-Status "  [FAIL] Missing: $binaryPath" "Red"
 }
 
-$chafa = Get-Command chafa -ErrorAction SilentlyContinue
-if ($chafa) {
-    Write-Host "✓ chafa found (image previews will work)" -ForegroundColor Green
+Write-Status ""
+Write-Status "PATH command:" "Yellow"
+$aniCommand = Get-Command ani-tui -ErrorAction SilentlyContinue
+if ($aniCommand) {
+    Write-Status "  [OK] ani-tui resolves to: $($aniCommand.Source)" "Green"
 } else {
-    Write-Host "⚠ chafa NOT found (image previews will not work)" -ForegroundColor Yellow
+    Write-Status "  [WARN] ani-tui is not visible in this terminal PATH" "Yellow"
+    Write-Status "         Open a new terminal or run: $binaryPath" "DarkGray"
 }
 
-# Environment info
-Write-Host ""
-Write-Host "Environment Info:" -ForegroundColor Yellow
-Write-Host "  PowerShell Version: $($PSVersionTable.PSVersion)"
-Write-Host "  User: $env:USERNAME"
-Write-Host "  Install Path: $installDir"
+Write-Status ""
+Write-Status "mpv candidates:" "Yellow"
+$mpvCandidates = New-Object System.Collections.Generic.List[string]
+if ($env:ANI_TUI_PLAYER) {
+    $mpvCandidates.Add($env:ANI_TUI_PLAYER)
+    Write-Status "  ANI_TUI_PLAYER: $env:ANI_TUI_PLAYER" "DarkGray"
+} else {
+    Write-Status "  ANI_TUI_PLAYER is not set in this terminal" "Yellow"
+}
 
-Write-Host ""
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "Quick Fixes:" -ForegroundColor Cyan
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host ""
-Write-Host "If ani-tui command not found, try:" -ForegroundColor White
-Write-Host "  1. Open a NEW terminal window" -ForegroundColor Yellow
-Write-Host "  2. Run: \`$env:LOCALAPPDATA\ani-tui\ani-tui.exe\`" -ForegroundColor Yellow
-Write-Host ""
-Write-Host "If video doesn't play:" -ForegroundColor White
-Write-Host "  Install mpv from: https://mpv.io/installation/" -ForegroundColor Yellow
-Write-Host ""
+$mpvCommand = Get-Command mpv -ErrorAction SilentlyContinue
+if ($mpvCommand) {
+    $mpvCandidates.Add($mpvCommand.Source)
+}
+$mpvCandidates.Add((Join-Path $InstallDir "mpv.exe"))
+$mpvCandidates.Add((Join-Path $InstallDir "tools\mpv\mpv.exe"))
 
-Read-Host "Press Enter to exit"
+$foundMpv = $false
+foreach ($candidate in ($mpvCandidates | Select-Object -Unique)) {
+    if (Test-Path $candidate) {
+        if (Test-VersionCommand $candidate) {
+            $foundMpv = $true
+        }
+    } else {
+        Write-Status "  [MISS] $candidate" "DarkGray"
+    }
+}
+
+if (-not $foundMpv) {
+    Write-Status "  [FAIL] No usable mpv.exe found" "Red"
+    Write-Status "         Rerun the installer or set ANI_TUI_PLAYER to the full mpv.exe path." "Yellow"
+}
+
+Write-Status ""
+Write-Status "Recent mpv log:" "Yellow"
+$mpvLog = Join-Path $env:TEMP "ani-tui-mpv.log"
+if (Test-Path $mpvLog) {
+    Write-Status "  $mpvLog" "DarkGray"
+    Get-Content $mpvLog -Tail 40
+} else {
+    Write-Status "  [MISS] No mpv log found at $mpvLog" "DarkGray"
+}
+
+Write-Status ""
+Write-Status "Environment:" "Yellow"
+Write-Status "  PowerShell: $($PSVersionTable.PSVersion)"
+Write-Status "  Windows:    $([Environment]::OSVersion.VersionString)"
+Write-Status "  TEMP:       $env:TEMP"
+
+Write-Status ""
+Write-Status "Recommended reinstall command:" "Cyan"
+Write-Status '  powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr -useb https://github.com/silent9669/ani-tui/releases/latest/download/install.ps1 -OutFile install.ps1; .\install.ps1"'

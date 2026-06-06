@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.4] - 2026-06-06
+### Fixed
+- Hardened Windows playback by adding mpv TLS compatibility flags, detached process launch, and fallback player discovery through `ANI_TUI_PLAYER` and portable mpv paths.
+- Updated AllAnime stream resolution to match latest upstream ani-cli provider behavior, including mp4upload referrer handling and stale source deprioritization.
+
+### Changed
+- Consolidated Windows installation around one PowerShell installer that verifies mpv, configures `ANI_TUI_PLAYER`, and keeps legacy installer entrypoints as wrappers.
+- Added Windows installer syntax checks to CI and published only the supported Windows installer in release assets.
+
 ## [3.8.2] - 2026-04-27
 - **AllAnime Decryption Fix**: Implemented a GraphQL GET request bypass using persisted queries to circumvent Cloudflare TLS fingerprinting issues.
 - **Homebrew Detection Refinement**: Improved `is_homebrew_install` logic to provide more accurate installation detection on macOS and avoid false positives in development environments.

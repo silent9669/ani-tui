@@ -1,129 +1,48 @@
 # Windows Installation Guide
 
-## 🌟 Complete Auto-Installer (Recommended)
-
-This installer automatically downloads and installs:
-- **mpv** (required for video playback)
-- **chafa** (optional for image previews)
-- **ani-tui**
-
-### PowerShell Method
+## Recommended Installer
 
 Open PowerShell and run:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr -useb https://raw.githubusercontent.com/silent9669/ani-tui/master/packaging/windows/install-complete.ps1 | iex"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr -useb https://github.com/silent9669/ani-tui/releases/latest/download/install.ps1 -OutFile install.ps1; .\install.ps1"
 ```
 
-### Batch File Method (Double-Click)
+The installer:
 
-1. Download [install-all.bat](https://raw.githubusercontent.com/silent9669/ani-tui/master/packaging/windows/install-all.bat)
-2. Double-click the downloaded file
-3. Follow the prompts
+- installs ani-tui to `%LOCALAPPDATA%\ani-tui`
+- verifies Visual C++ Redistributable when winget is available
+- installs or locates `mpv` for video playback
+- falls back to a portable shinchiro mpv build under `%LOCALAPPDATA%\ani-tui\tools\mpv`
+- sets `ANI_TUI_PLAYER` to the resolved `mpv.exe`
+- adds ani-tui to the user PATH
 
-### What This Installs
-
-| Software | Purpose | Status |
-|----------|---------|--------|
-| mpv | Video playback | **REQUIRED** |
-| chafa | Image previews | Optional |
-| ani-tui | Main app | **REQUIRED** |
-
-All software is installed to: `%USERPROFILE%\ani-tui`
-
-## Other Installation Methods
-
-### Manual Download
-
-1. Download the latest release: https://github.com/silent9669/ani-tui/releases/latest
-2. Download `ani-tui-windows-x86_64.zip`
-3. Extract to a folder
-4. Add that folder to your PATH
-
-### Using Scoop
+Open a new terminal after installation and run:
 
 ```powershell
-scoop bucket add ani-tui https://github.com/silent9669/ani-tui
-scoop install ani-tui
-scoop install mpv
+ani-tui
 ```
 
-## Important Notes
+## Troubleshooting
 
-### You MUST Open a NEW Terminal
+Run the diagnostic script:
 
-After installation, **close your current terminal and open a new one**. The PATH changes require a fresh terminal session.
-
-### Test Your Installation
-
-After opening a new terminal, test with:
-```powershell
-ani-tui --version
-```
-
-### If "ani-tui" Command Not Found
-
-Run the diagnostic tool:
 ```powershell
 iwr -useb https://raw.githubusercontent.com/silent9669/ani-tui/master/packaging/windows/diagnose.ps1 | iex
 ```
 
-Or use the full path:
+If video playback does not open an mpv window, inspect:
+
 ```powershell
-$env:USERPROFILE\ani-tui\ani-tui.exe
+$env:TEMP\ani-tui-mpv.log
 ```
 
-## Critical Requirements
+You can also force a specific player:
 
-### Visual C++ Redistributable (REQUIRED)
-
-**ani-tui requires Microsoft Visual C++ Redistributable to run on Windows.**
-
-If ani-tui command does nothing or returns immediately:
-
-1. **Install Visual C++ Redistributable:**
-   ```powershell
-   winget install Microsoft.VCRedist.2015+.x64
-   ```
-   Or download from: https://aka.ms/vs/17/release/vc_redist.x64.exe
-
-2. **Restart your computer** (recommended)
-
-3. Try running ani-tui again
-
-## Troubleshooting
-
-### "ani-tui" command does nothing (no output)
-
-This usually means you're missing Visual C++ Redistributable:
-
-1. Install it: https://aka.ms/vs/17/release/vc_redist.x64.exe
-2. Restart terminal
-3. Try again
-
-### "ani-tui is not recognized as a command"
-
-1. Open a NEW terminal window (important!)
-2. Try again
-3. If still not working, reinstall with the complete installer above
-
-### Video doesn't play
-
-The complete installer should install mpv automatically. If not:
 ```powershell
-winget install mpv
+[Environment]::SetEnvironmentVariable("ANI_TUI_PLAYER", "C:\path\to\mpv.exe", "User")
 ```
 
-### Images don't show
+## Legacy Scripts
 
-The complete installer should install chafa automatically. If not, it's optional - the app will work without it.
-
-## Uninstallation
-
-To remove ani-tui and all dependencies:
-
-1. Delete the installation folder: `%USERPROFILE%\ani-tui`
-2. Remove from PATH:
-   - Open System Properties → Environment Variables
-   - Edit "Path" under User variables
-   - Remove the ani-tui folder path
+`install-complete.ps1`, `install-easy.ps1`, `install-all.bat`, and `install.bat` are compatibility wrappers. New documentation and releases should point to `install.ps1`.

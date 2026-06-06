@@ -11,9 +11,8 @@ use std::time::Duration;
 
 const ALLANIME_API: &str = "https://api.allanime.day/api";
 const ALLANIME_BASE: &str = "https://allanime.day";
-const ALLANIME_REFERRER: &str = "https://allmanga.to";
-const ALLANIME_ALT_REFERRER: &str = "https://youtu-chan.com";
-const MP4UPLOAD_REFERRER: &str = "https://www.mp4upload.com/";
+const ALLANIME_REFERRER: &str = "https://youtu-chan.com";
+const MP4UPLOAD_REFERRER: &str = "https://www.mp4upload.com";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,6 +49,7 @@ impl StreamCandidate {
 
 pub struct AllAnimeProvider {
     client: reqwest::Client,
+    insecure_client: reqwest::Client,
 }
 
 impl Default for AllAnimeProvider {
@@ -73,12 +73,22 @@ impl AllAnimeProvider {
         );
 
         let client = reqwest::Client::builder()
-            .default_headers(headers)
+            .default_headers(headers.clone())
             .timeout(REQUEST_TIMEOUT)
             .build()
             .expect("Failed to create HTTP client");
 
-        Self { client }
+        let insecure_client = reqwest::Client::builder()
+            .default_headers(headers)
+            .timeout(REQUEST_TIMEOUT)
+            .danger_accept_invalid_certs(true)
+            .build()
+            .expect("Failed to create insecure HTTP client");
+
+        Self {
+            client,
+            insecure_client,
+        }
     }
 
     pub fn decrypt_tobeparsed(encrypted: &str) -> Result<String> {
@@ -319,6 +329,20 @@ impl AllAnimeProvider {
     fn best_candidate(mut candidates: Vec<StreamCandidate>) -> Option<StreamCandidate> {
         candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.quality.unwrap_or(0)));
         candidates.into_iter().next()
+    }
+
+    fn source_priority() -> &'static [&'static str] {
+        &[
+            "Default", "Yt-mp4", "S-mp4", "Mp4", "Fm-Hls", "Fm-mp4", "Ok", "Sup", "Uni",
+        ]
+    }
+
+    fn referrer_for_source(url: &str, source_name: &str) -> &'static str {
+        if url.contains("mp4upload.com") || source_name == "Mp4" {
+            MP4UPLOAD_REFERRER
+        } else {
+            ALLANIME_REFERRER
+        }
     }
 
     fn extract_mp4upload_url(html: &str) -> Option<String> {
@@ -573,7 +597,7 @@ impl AllAnimeProvider {
     ) -> Result<(Vec<StreamCandidate>, Vec<Subtitle>)> {
         if url.contains("mp4upload.com") && !url.contains(".mp4") {
             let html = self
-                .client
+                .insecure_client
                 .get(url)
                 .header(header::REFERER, ALLANIME_REFERRER)
                 .send()
@@ -611,13 +635,7 @@ impl AllAnimeProvider {
             }
         }
 
-        let referrer = if url.contains("mp4upload.com") {
-            MP4UPLOAD_REFERRER
-        } else if url.contains("tools.fast4speed.rsvp") || source_name == "Yt-mp4" {
-            ALLANIME_ALT_REFERRER
-        } else {
-            ALLANIME_REFERRER
-        };
+        let referrer = Self::referrer_for_source(url, source_name);
 
         Ok((
             vec![StreamCandidate::new(url.to_string(), source_name).with_referrer(referrer)],
@@ -713,7 +731,15 @@ impl AllAnimeProvider {
     }
 
     async fn candidate_is_playable(&self, candidate: &StreamCandidate) -> bool {
-        let mut request = self.client.get(&candidate.url);
+        let client = if candidate.url.contains("mp4upload.com")
+            || candidate.headers.get("Referer").map(String::as_str) == Some(MP4UPLOAD_REFERRER)
+        {
+            &self.insecure_client
+        } else {
+            &self.client
+        };
+
+        let mut request = client.get(&candidate.url);
         if let Some(referrer) = candidate.headers.get("Referer") {
             request = request.header(header::REFERER, referrer);
         }
@@ -899,7 +925,7 @@ impl AnimeProvider for AllAnimeProvider {
         let response_text = self
             .client
             .get(&api_url)
-            .header("Origin", "https://youtu-chan.com")
+            .header("Origin", ALLANIME_REFERRER)
             .send()
             .await
             .context("GET GraphQL request failed")?
@@ -957,15 +983,10 @@ impl AnimeProvider for AllAnimeProvider {
         };
 
         if let Some(source_urls) = episode["sourceUrls"].as_array() {
-            let priority_sources = [
-                "Mp4", "Default", "Yt-mp4", "S-mp4", "Luf-Mp4", "Fm-Hls", "Fm-mp4", "Ok", "Sup",
-                "Uni",
-            ];
-
-            for priority_name in &priority_sources {
+            for &priority_name in Self::source_priority() {
                 let Some(source) = source_urls
                     .iter()
-                    .find(|s| s["sourceName"].as_str() == Some(*priority_name))
+                    .find(|s| s["sourceName"].as_str() == Some(priority_name))
                 else {
                     continue;
                 };
@@ -1085,6 +1106,27 @@ https://cdn.example/720/index.m3u8
 
         let best = AllAnimeProvider::best_candidate(candidates).unwrap();
         assert_eq!(best.quality, Some(1080));
+    }
+
+    #[test]
+    fn test_source_priority_matches_latest_ani_cli_active_sources() {
+        let priority = AllAnimeProvider::source_priority();
+
+        assert_eq!(&priority[..4], ["Default", "Yt-mp4", "S-mp4", "Mp4"]);
+        assert!(priority.contains(&"Fm-Hls"));
+        assert!(priority.contains(&"Fm-mp4"));
+        assert!(!priority.contains(&"Luf-Mp4"));
+    }
+
+    #[test]
+    fn test_mp4upload_referrer_matches_upstream_mpv_flag() {
+        assert_eq!(
+            AllAnimeProvider::referrer_for_source(
+                "https://www.mp4upload.com/embed-example.html",
+                "Mp4",
+            ),
+            "https://www.mp4upload.com"
+        );
     }
 
     #[test]

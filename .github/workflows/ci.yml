@@ -67,6 +67,26 @@ jobs:
     - name: Install dependencies (Ubuntu)
       if: matrix.os == 'ubuntu-latest'
       run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+
+    - name: Check Windows installer syntax
+      if: matrix.os == 'windows-latest'
+      shell: pwsh
+      run: |
+        $files = @(
+          "packaging/windows/install.ps1",
+          "packaging/windows/install-complete.ps1",
+          "packaging/windows/install-easy.ps1",
+          "packaging/windows/diagnose.ps1",
+          "packaging/windows/fix-execution.ps1"
+        )
+        foreach ($file in $files) {
+          $errors = $null
+          [System.Management.Automation.PSParser]::Tokenize((Get-Content $file -Raw), [ref]$errors) | Out-Null
+          if ($errors) {
+            $errors | Format-List
+            throw "PowerShell syntax check failed for $file"
+          }
+        }
     
     - name: Cache cargo registry and build
       uses: actions/cache@v4
