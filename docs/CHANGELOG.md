@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0] - 2026-08-14
+### Added
+- 5 new providers: AniDB, AnimeGG, AniZone, MovieBox, and Niniyo — bringing the total to 8 streaming sources.
+- AniSkip integration: intro/outro (op/ed) skip times are fetched for the playing episode and skipped automatically during playback.
+- `provider_smoke` binary for end-to-end verification of every provider against live services.
+
+### Fixed
+- MovieBox playback: per-format request headers are now sent (mobile user agent for MP4 streams, desktop user agent with Referer and CDN cookie for DASH streams), fixing 428/429 rejections.
+- Skip-watcher log lines were being overwritten by mpv's own log file rewrites; skip events now go to a dedicated log file so auto-skip is reliably reported and acted upon.
+- AllAnime stream resolution cleanup (removed debug hooks, reverted to the canonical API host).
+
+### Changed
+- Upgraded `reqwest` to 0.12 and `self_update` to 1.0.0-rc.6, clearing all `cargo audit` security advisories.
+- Updated the splash screen tagline for the new provider lineup.
+
 ## [3.8.4] - 2026-06-06
 ### Fixed
 - Hardened Windows playback by adding mpv TLS compatibility flags, detached process launch, and fallback player discovery through `ANI_TUI_PLAYER` and portable mpv paths.

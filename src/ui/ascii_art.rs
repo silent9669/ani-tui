@@ -23,7 +23,7 @@ impl AsciiArt {
     }
 
     pub fn subtitle() -> &'static str {
-        "v3.8.4"
+        "v3.9.0"
     }
 
     pub fn render_banner_colored() -> Vec<Line<'static>> {
