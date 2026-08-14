@@ -22,6 +22,12 @@ image_preview = true
 theme = "dark"
 
 [sources]
+# Enable AniZone source (English subtitles)
+anizone = true
+
+# Enable AniDB source (Japanese audio, no subtitles)
+anidb = true
+
 # Enable AllAnime source (English subtitles)
 allanime = true
 
@@ -30,6 +36,9 @@ kkphim = true
 
 # Enable OPhim source (Vietnamese subtitles/dub)
 ophim = true
+
+# Enable Niniyo source (Vietnamese subtitles/dub)
+niniyo = true
 
 [cache]
 # Metadata cache TTL in days (AniList data)

@@ -1,5 +1,10 @@
 pub mod allanime;
+pub mod anidb;
+pub mod animegg;
+pub mod anizone;
 pub mod kkphim;
+pub mod moviebox;
+pub mod niniyo;
 pub mod ophim;
 
 use crate::config::Config;
@@ -17,6 +22,8 @@ pub struct Anime {
     pub language: Language,
     pub total_episodes: Option<u32>,
     pub synopsis: Option<String>,
+    #[serde(default)]
+    pub anilist_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,6 +32,8 @@ pub struct Episode {
     pub number: u32,
     pub title: Option<String>,
     pub thumbnail: Option<String>,
+    #[serde(default)]
+    pub aniskip_episode_number: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,6 +42,8 @@ pub struct StreamInfo {
     pub subtitles: Vec<Subtitle>,
     pub qualities: Vec<String>,
     pub headers: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub use_curl: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,20 +87,45 @@ impl ProviderRegistry {
         let mut providers: Vec<Arc<dyn AnimeProvider>> = Vec::new();
 
         // --- English Sources ---
-        // 1. AllAnime (Anime & Films)
+        // 1. AniZone
+        if config.sources.anizone {
+            providers.push(Arc::new(anizone::AniZoneProvider::new()));
+        }
+
+        // 2. AniDB
+        if config.sources.anidb {
+            providers.push(Arc::new(anidb::AniDbProvider::new()));
+        }
+
+        // 3. AllAnime (Anime & Films)
         if config.sources.allanime {
             providers.push(Arc::new(allanime::AllAnimeProvider::new()));
         }
 
+        // 4. AnimeGG
+        if config.sources.animegg {
+            providers.push(Arc::new(animegg::AnimeGgProvider::new()));
+        }
+
+        // 5. MovieBox
+        if config.sources.moviebox {
+            providers.push(Arc::new(moviebox::MovieBoxProvider::new()));
+        }
+
         // --- Vietnamese Sources ---
-        // 2. KKPhim
+        // 6. KKPhim
         if config.sources.kkphim {
             providers.push(Arc::new(kkphim::KkphimProvider::new()));
         }
 
-        // 3. OPhim
+        // 7. OPhim
         if config.sources.ophim {
             providers.push(Arc::new(ophim::OphimProvider::new()));
+        }
+
+        // 8. Niniyo
+        if config.sources.niniyo {
+            providers.push(Arc::new(niniyo::NiniyoProvider::new()));
         }
 
         Self { providers }

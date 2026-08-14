@@ -1,4 +1,4 @@
-use super::{Anime, AnimeProvider, Episode, Language, StreamInfo, Subtitle};
+use super::{Anime, AnimeProvider, Episode, Language, StreamInfo};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use reqwest::header::{self, HeaderMap};
@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 const OPHIM_API: &str = "https://ophim1.com/v1/api";
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub struct OphimProvider {
     client: reqwest::Client,
@@ -24,6 +24,10 @@ impl OphimProvider {
         headers.insert(header::USER_AGENT, header::HeaderValue::from_static(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         ));
+        headers.insert(
+            header::REFERER,
+            header::HeaderValue::from_static("https://ophim17.cc/"),
+        );
 
         let client = reqwest::Client::builder()
             .default_headers(headers)
@@ -59,6 +63,8 @@ impl AnimeProvider for OphimProvider {
             .send()
             .await
             .context("Failed to search OPhim")?
+            .error_for_status()
+            .context("OPhim search returned an error response")?
             .json()
             .await
             .context("Failed to parse OPhim search response")?;
@@ -80,18 +86,18 @@ impl AnimeProvider for OphimProvider {
                 for item in items {
                     let slug = item["slug"].as_str().unwrap_or_default().to_string();
                     let name = item["name"].as_str().unwrap_or_default().to_string();
-                    let thumb = item["thumb_url"].as_str().unwrap_or_default().to_string();
-                    let poster = item["poster_url"].as_str().unwrap_or_default().to_string();
 
-                    // Use APP_DOMAIN_CDN_IMAGE if available, or fallback to known CDN
+                    let thumb = item["thumb_url"].as_str().unwrap_or_default();
+                    let poster = item["poster_url"].as_str().unwrap_or_default();
+
                     let cdn = response["data"]["APP_DOMAIN_CDN_IMAGE"]
                         .as_str()
                         .unwrap_or("https://img.ophim.live");
 
                     let image_url = if poster.starts_with("http") {
-                        poster
+                        poster.to_string()
                     } else if thumb.starts_with("http") {
-                        thumb
+                        thumb.to_string()
                     } else {
                         format!("{}/uploads/movies/{}", cdn.trim_end_matches('/'), poster)
                     };
@@ -105,6 +111,7 @@ impl AnimeProvider for OphimProvider {
                             language: Language::Vietnamese,
                             total_episodes: None,
                             synopsis: None,
+                            anilist_id: None,
                         });
                     }
                 }
@@ -148,6 +155,7 @@ impl AnimeProvider for OphimProvider {
                                             ep["filename"].as_str().unwrap_or("").to_string(),
                                         ),
                                         thumbnail: None,
+                                        aniskip_episode_number: Some(ep_num),
                                     });
                                 }
                             }
@@ -185,7 +193,7 @@ impl AnimeProvider for OphimProvider {
             .context("Failed to parse OPhim stream response")?;
 
         let mut stream_url = String::new();
-        let mut subtitles: Vec<Subtitle> = Vec::new();
+        let subtitles = Vec::new();
 
         if let Some(data) = response.get("data") {
             if let Some(item) = data.get("item") {
@@ -238,11 +246,6 @@ impl AnimeProvider for OphimProvider {
                                         }
                                     }
 
-                                    subtitles.push(Subtitle {
-                                        language: "vi".to_string(),
-                                        url: String::new(),
-                                    });
-
                                     break 'outer;
                                 }
                             }
@@ -266,6 +269,7 @@ impl AnimeProvider for OphimProvider {
             subtitles,
             qualities: vec!["auto".to_string()],
             headers,
+            use_curl: false,
         })
     }
 }

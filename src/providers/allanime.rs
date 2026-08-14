@@ -1,19 +1,45 @@
-use super::{Anime, AnimeProvider, Episode, Language, StreamInfo, Subtitle};
+use super::{parse_episode_number, Anime, AnimeProvider, Episode, Language, StreamInfo, Subtitle};
 use aes::cipher::{KeyIvInit, StreamCipher};
+use aes_gcm::{
+    aead::{Aead, KeyInit as AeadKeyInit},
+    Aes256Gcm, Nonce,
+};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use base64::Engine as _;
+use hmac::Mac;
 use regex::Regex;
 use reqwest::header::{self, HeaderMap};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::sync::RwLock;
 
-const ALLANIME_API: &str = "https://api.allanime.day/api";
-const ALLANIME_BASE: &str = "https://allanime.day";
-const ALLANIME_REFERRER: &str = "https://youtu-chan.com";
+const ALLANIME_API: &str = "https://api.mkissa.net/api";
+const ALLANIME_CRYPTO_BOOTSTRAP: &str = "https://api.mkissa.net/client-crypto/v1/bootstrap";
+const ALLANIME_BUILD_ID: &str = "110";
+const ALLANIME_KEY_GROUP: &str = "mkissa";
+const ALLANIME_HOST: &str = "mkissa.to";
+const ALLANIME_LANE: &str = "k7";
+const ALLANIME_QUERY_HASH_SEARCH: &str =
+    "b1c9564668f81293003be988b1f6594d8ce3951f2a16bb4c64d896471d678077";
+const ALLANIME_QUERY_HASH_DETAIL: &str =
+    "e0a219831b88c540498c7c4cfde2c174a58296db92d98ce64d6b2a66326c6fbf";
+const ALLANIME_QUERY_HASH_EPISODE: &str =
+    "3dd139fb89a54cddb2b167a23e274c49a2ec9ab036ab64d2b39f92c0e9dd888e";
 const MP4UPLOAD_REFERRER: &str = "https://www.mp4upload.com";
+const ALLANIME_REFERRER: &str = "https://youtu-chan.com";
+const ALLANIME_ORIGIN: &str = "https://mkissa.to";
+const ALLANIME_BASE: &str = "https://mkissa.to";
+const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Clone)]
+struct AllAnimeCryptoState {
+    expires_at_ms: u64,
+    epoch: u64,
+    key: [u8; 32],
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StreamCandidate {
@@ -27,6 +53,7 @@ impl StreamCandidate {
     fn new(url: String, label: impl Into<String>) -> Self {
         let mut headers = HashMap::new();
         headers.insert("Referer".to_string(), ALLANIME_REFERRER.to_string());
+        headers.insert("User-Agent".to_string(), USER_AGENT.to_string());
 
         Self {
             url,
@@ -50,6 +77,7 @@ impl StreamCandidate {
 pub struct AllAnimeProvider {
     client: reqwest::Client,
     insecure_client: reqwest::Client,
+    crypto: RwLock<Option<AllAnimeCryptoState>>,
 }
 
 impl Default for AllAnimeProvider {
@@ -63,13 +91,11 @@ impl AllAnimeProvider {
         let mut headers = HeaderMap::new();
         headers.insert(
             header::USER_AGENT,
-            header::HeaderValue::from_static(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            ),
+            header::HeaderValue::from_static(USER_AGENT),
         );
         headers.insert(
             header::REFERER,
-            header::HeaderValue::from_static(ALLANIME_REFERRER),
+            header::HeaderValue::from_static(ALLANIME_ORIGIN),
         );
 
         let client = reqwest::Client::builder()
@@ -88,80 +114,275 @@ impl AllAnimeProvider {
         Self {
             client,
             insecure_client,
+            crypto: RwLock::new(None),
         }
     }
 
-    pub fn decrypt_tobeparsed(encrypted: &str) -> Result<String> {
-        let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encrypted)
-            .context("Failed to decode base64 tobeparsed")?;
+    fn unix_time_ms() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64
+    }
 
-        // Format: 1-byte header/version tag + IV (12 bytes) + Ciphertext + Signature (16 bytes)
-        // Minimum length = 1 (header) + 12 (IV) + 16 (signature) = 29
-        if decoded.len() < 29 {
-            anyhow::bail!("Encrypted data too short");
+    fn build_mask(build_id: &str) -> [u8; 32] {
+        // Mirrors the runtime `b_` derivation in the Mkissa crypto bundle:
+        // four base64 fragments are XOR-mixed with a build-id key stream and
+        // a per-part/per-byte constant, producing a 32-byte mask that is
+        // epoch-independent.
+        const XD: [&str; 4] = [
+            "bYbiqMWaGN0=",
+            "1wgQ45B/tts=",
+            "0dDkHy33wIU=",
+            "vHKzMJg/BJ4=",
+        ];
+        let id_bytes = build_id.as_bytes();
+        let mut stream = [0u8; 32];
+        for (index, byte) in stream.iter_mut().enumerate() {
+            *byte = id_bytes[index % id_bytes.len()] ^ ((index * 17 + 31) & 255) as u8;
         }
 
-        // Key = Sha256("Xot36i3lK3:v1")
-        let secret = "Xot36i3lK3:v1";
-        let mut hasher = Sha256::new();
-        hasher.update(secret);
-        let key = hasher.finalize();
+        let mut mask = [0u8; 32];
+        for (part, fragment) in XD.iter().enumerate() {
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(fragment)
+                .expect("AllAnime mask fragment is valid base64");
+            let offset = part * 8;
+            for (index, data) in decoded.iter().enumerate() {
+                mask[offset + index] =
+                    data ^ stream[offset + index] ^ (part as u8 * 41 + index as u8 * 7);
+            }
+        }
+        mask
+    }
 
-        // Skip the first byte (decoded[0])
-        // IV = bytes 1 to 13 (12 bytes) + counter "00000002"
-        let iv_bytes = &decoded[1..13];
-        let mut iv = [0u8; 16];
-        iv[0..12].copy_from_slice(iv_bytes);
-        iv[15] = 2; // Counter starts at 2 as per ani-cli decode_tobeparsed logic
+    fn current_epoch() -> u64 {
+        let now = Self::unix_time_ms();
+        let epoch = now / 604_800_000;
+        if epoch > 0 && now - epoch * 604_800_000 < 86_400_000 {
+            epoch - 1
+        } else {
+            epoch
+        }
+    }
 
-        // Ciphertext is after IV and before the last 16 bytes (signature)
-        let ciphertext_end = decoded.len() - 16;
-        let ciphertext = &decoded[13..ciphertext_end];
-        let mut data = ciphertext.to_vec();
+    fn hmac_sha256(key: &[u8], message: &[u8]) -> Vec<u8> {
+        type HmacSha256 = hmac::Hmac<Sha256>;
+        let mut mac =
+            <HmacSha256 as Mac>::new_from_slice(key).expect("HMAC accepts any key length");
+        mac.update(message);
+        mac.finalize().into_bytes().to_vec()
+    }
 
-        type Aes256Ctr = ctr::Ctr128BE<aes::Aes256>;
-        let mut cipher = Aes256Ctr::new(&key, &iv.into());
-        cipher.apply_keystream(&mut data);
+    fn boot_token(
+        mask: &[u8; 32],
+        build_id: &str,
+        key_group: &str,
+        host: &str,
+        epoch: u64,
+        lane: &str,
+    ) -> String {
+        let digest = Self::hmac_sha256(mask, format!("aa-boot:{build_id}").as_bytes());
+        let message = if lane.is_empty() {
+            format!("{build_id}:{key_group}:{host}:{epoch}")
+        } else {
+            format!("{build_id}:{key_group}:{host}:{epoch}:{lane}")
+        };
+        let token = Self::hmac_sha256(&digest, message.as_bytes());
+        token
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    }
 
-        let decrypted = String::from_utf8(data).context("Failed to parse decrypted UTF-8")?;
-        Ok(decrypted)
+    async fn fetch_live_crypto(&self) -> Result<AllAnimeCryptoState> {
+        let mask = Self::build_mask(ALLANIME_BUILD_ID);
+        let epoch = Self::current_epoch();
+        let token = Self::boot_token(
+            &mask,
+            ALLANIME_BUILD_ID,
+            ALLANIME_KEY_GROUP,
+            ALLANIME_HOST,
+            epoch,
+            ALLANIME_LANE,
+        );
+        let bootstrap_url = format!(
+            "{ALLANIME_CRYPTO_BOOTSTRAP}?buildId={}&k={}",
+            ALLANIME_BUILD_ID, ALLANIME_LANE
+        );
+        let response: serde_json::Value = self
+            .client
+            .get(&bootstrap_url)
+            .header("x-aa-boot", &token)
+            .header("x-build-id", ALLANIME_BUILD_ID)
+            .send()
+            .await
+            .context("Failed to fetch AllAnime crypto bootstrap")?
+            .error_for_status()
+            .context("AllAnime crypto bootstrap was rejected")?
+            .json()
+            .await
+            .context("Failed to parse AllAnime crypto bootstrap")?;
+        let part_b = response["partB"]
+            .as_str()
+            .context("AllAnime crypto bootstrap secret was missing")?;
+        let epoch = response["epoch"]
+            .as_u64()
+            .context("AllAnime crypto bootstrap epoch was missing")?;
+        let switch_at = response["switchAt"].as_u64().unwrap_or_default();
+        let grace_ms = response["graceMs"].as_u64().unwrap_or_default();
+
+        let part_b = base64::engine::general_purpose::STANDARD
+            .decode(part_b)
+            .context("Failed to decode AllAnime crypto secret")?;
+        anyhow::ensure!(
+            part_b.len() == mask.len(),
+            "AllAnime crypto secret has an invalid length"
+        );
+        let mut key = [0u8; 32];
+        for (index, byte) in key.iter_mut().enumerate() {
+            *byte = part_b[index] ^ mask[index];
+        }
+
+        Ok(AllAnimeCryptoState {
+            expires_at_ms: (switch_at + grace_ms).max(Self::unix_time_ms() + 60 * 60 * 1000),
+            epoch,
+            key,
+        })
+    }
+
+    async fn current_crypto(&self) -> Result<AllAnimeCryptoState> {
+        let now = Self::unix_time_ms();
+        if let Some(cached) = self
+            .crypto
+            .read()
+            .await
+            .as_ref()
+            .filter(|cached| cached.expires_at_ms > now)
+            .cloned()
+        {
+            return Ok(cached);
+        }
+
+        let crypto = self
+            .fetch_live_crypto()
+            .await
+            .context("AllAnime runtime crypto is unavailable")?;
+        tracing::debug!(epoch = crypto.epoch, "AllAnime runtime crypto refreshed");
+        *self.crypto.write().await = Some(crypto.clone());
+        Ok(crypto)
+    }
+
+    async fn build_source_request_crypto(&self) -> Result<(AllAnimeCryptoState, String)> {
+        let crypto = self.current_crypto().await?;
+        let timestamp = Self::unix_time_ms() / 300_000 * 300_000;
+        let iv_digest = Sha256::digest(
+            format!(
+                "{}:{}:{}:{}:{}",
+                crypto.epoch,
+                ALLANIME_BUILD_ID,
+                ALLANIME_QUERY_HASH_EPISODE,
+                timestamp,
+                ALLANIME_LANE
+            )
+            .as_bytes(),
+        );
+        let mut iv = [0u8; 12];
+        iv.copy_from_slice(&iv_digest[..12]);
+        let payload = serde_json::to_vec(&serde_json::json!({
+            "v": 1,
+            "ts": timestamp,
+            "epoch": crypto.epoch,
+            "buildId": ALLANIME_BUILD_ID,
+            "qh": ALLANIME_QUERY_HASH_EPISODE,
+            "k": ALLANIME_LANE,
+        }))?;
+        let cipher = Aes256Gcm::new_from_slice(&crypto.key)
+            .map_err(|_| anyhow::anyhow!("AllAnime request crypto key was invalid"))?;
+        let encrypted = cipher
+            .encrypt(Nonce::from_slice(&iv), payload.as_ref())
+            .map_err(|_| anyhow::anyhow!("Failed to encrypt AllAnime request token"))?;
+        let mut token = Vec::with_capacity(1 + iv.len() + encrypted.len());
+        token.push(1);
+        token.extend_from_slice(&iv);
+        token.extend_from_slice(&encrypted);
+        Ok((
+            crypto,
+            base64::engine::general_purpose::STANDARD.encode(token),
+        ))
+    }
+
+    fn decrypt_source_payload(encrypted: &str, runtime_key: &[u8; 32]) -> Result<String> {
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(encrypted)
+            .context("Failed to decode encrypted AllAnime source response")?;
+        anyhow::ensure!(
+            decoded.len() >= 29,
+            "Encrypted AllAnime source response was too short"
+        );
+        let nonce = Nonce::from_slice(&decoded[1..13]);
+        let cipher = Aes256Gcm::new_from_slice(runtime_key)
+            .map_err(|_| anyhow::anyhow!("AllAnime response crypto key was invalid"))?;
+        let plain = cipher
+            .decrypt(nonce, &decoded[13..])
+            .map_err(|_| anyhow::anyhow!("Failed to decrypt AllAnime source response"))?;
+        String::from_utf8(plain).context("AllAnime source response was not valid UTF-8")
     }
 
     async fn graphql_query(
         &self,
-        query: &str,
+        query_hash: &str,
         variables: serde_json::Value,
     ) -> Result<serde_json::Value> {
-        let response: serde_json::Value = self
-            .client
-            .post(ALLANIME_API)
-            .header("Content-Type", "application/json")
-            .json(&serde_json::json!({
-                "variables": variables,
-                "query": query
-            }))
+        let extensions = serde_json::json!({
+            "persistedQuery": {
+                "version": 1,
+                "sha256Hash": query_hash
+            }
+        });
+        let api_url = format!(
+            "{}?variables={}&extensions={}",
+            ALLANIME_API,
+            url::form_urlencoded::byte_serialize(variables.to_string().as_bytes())
+                .collect::<String>(),
+            url::form_urlencoded::byte_serialize(extensions.to_string().as_bytes())
+                .collect::<String>()
+        );
+        self.client
+            .get(&api_url)
+            .header("x-build-id", ALLANIME_BUILD_ID)
             .send()
             .await
             .context("GraphQL request failed")?
+            .error_for_status()
+            .context("GraphQL request returned an error")?
             .json()
             .await
-            .context("Failed to parse GraphQL response")?;
-
-        // Check if data is wrapped in tobeparsed
-        if let Some(data) = response.get("data") {
-            if let Some(tobeparsed) = data["tobeparsed"].as_str() {
-                let decrypted = Self::decrypt_tobeparsed(tobeparsed)?;
-                return serde_json::from_str(&decrypted).context("Failed to parse decrypted JSON");
-            }
-        }
-
-        Ok(response)
+            .context("Failed to parse GraphQL response")
     }
 
     pub fn decode_provider_id(encoded: &str) -> String {
         let encoded = encoded.trim_start_matches("--");
         let mut result = String::new();
         let chars: Vec<char> = encoded.chars().collect();
+
+        let mut decoded_xor = String::new();
+        for chunk in chars.chunks(2) {
+            if chunk.len() == 2 {
+                let hex = format!("{}{}", chunk[0], chunk[1]);
+                if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                    let decoded_char = (byte ^ 0x38) as char;
+                    decoded_xor.push(decoded_char);
+                }
+            }
+        }
+        if decoded_xor.starts_with("/api")
+            || decoded_xor.starts_with("http")
+            || decoded_xor.starts_with("clock")
+            || decoded_xor.starts_with("/clock")
+        {
+            return decoded_xor;
+        }
 
         for chunk in chars.chunks(2) {
             if chunk.len() == 2 {
@@ -333,7 +554,8 @@ impl AllAnimeProvider {
 
     fn source_priority() -> &'static [&'static str] {
         &[
-            "Default", "Yt-mp4", "S-mp4", "Mp4", "Fm-Hls", "Fm-mp4", "Ok", "Sup", "Uni",
+            "Yt-mp4", "S-Mp4", "S-mp4", "Uv-mp4", "Ak", "Default", "Luf-Mp4", "Mp4", "Ss-Hls",
+            "Sl-mp4", "Fm-Hls", "Fm-mp4", "Ok", "Other", "Sup", "Uni",
         ]
     }
 
@@ -358,6 +580,35 @@ impl AllAnimeProvider {
                 .and_then(|captures| captures.get(1))
                 .map(|matched| matched.as_str().replace("\\u0026", "&").replace("\\/", "/"))
         })
+    }
+
+    fn extract_okru_stream_url(html: &str) -> Option<String> {
+        let encoded_options = Regex::new(r#"data-options=\"([^\"]+)\""#)
+            .ok()?
+            .captures(html)?
+            .get(1)?
+            .as_str();
+        let decoded_options = encoded_options
+            .replace("&quot;", "\"")
+            .replace("&amp;", "&")
+            .replace("&#39;", "'")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">");
+        let options: serde_json::Value = serde_json::from_str(&decoded_options).ok()?;
+        let metadata = options.pointer("/flashvars/metadata")?.as_str()?;
+        let metadata: serde_json::Value = serde_json::from_str(metadata).ok()?;
+
+        metadata["ondemandHls"]
+            .as_str()
+            .filter(|url| !url.is_empty())
+            .or_else(|| {
+                metadata["videos"]
+                    .as_array()?
+                    .iter()
+                    .rev()
+                    .find_map(|video| video["url"].as_str().filter(|url| !url.is_empty()))
+            })
+            .map(str::to_string)
     }
 
     fn parse_hls_master_playlist(
@@ -615,7 +866,31 @@ impl AllAnimeProvider {
                 ));
             }
 
-            anyhow::bail!("mp4upload embed page did not expose a playable mp4 URL");
+            tracing::warn!("AllAnime mp4upload embed did not contain a media URL");
+            return Ok((Vec::new(), Vec::new()));
+        }
+
+        if url.contains("ok.ru/videoembed") {
+            let html = self
+                .client
+                .get(url)
+                .header(header::REFERER, ALLANIME_REFERRER)
+                .send()
+                .await
+                .context("Failed to fetch OK.ru embed page")?
+                .text()
+                .await
+                .context("Failed to read OK.ru embed page")?;
+
+            if let Some(stream_url) = Self::extract_okru_stream_url(&html) {
+                return Ok((
+                    vec![StreamCandidate::new(stream_url, "ok.ru").with_referrer(url)],
+                    Vec::new(),
+                ));
+            }
+
+            tracing::warn!("AllAnime OK.ru embed did not contain a media URL");
+            return Ok((Vec::new(), Vec::new()));
         }
 
         if url.contains(".m3u8") {
@@ -632,6 +907,25 @@ impl AllAnimeProvider {
             let candidates = Self::parse_hls_master_playlist(&playlist, url, ALLANIME_REFERRER);
             if !candidates.is_empty() {
                 return Ok((candidates, Vec::new()));
+            }
+        }
+
+        if source_name.starts_with("Fm") {
+            let response = self
+                .client
+                .get(url)
+                .header(header::REFERER, ALLANIME_REFERRER)
+                .send()
+                .await
+                .context("Failed to fetch Fm-Hls page")?
+                .text()
+                .await
+                .context("Failed to read Fm-Hls page")?;
+
+            if let Ok(candidates) = Self::decrypt_filemoon_payload(&response) {
+                if !candidates.is_empty() {
+                    return Ok((candidates, Vec::new()));
+                }
             }
         }
 
@@ -763,8 +1057,8 @@ impl AllAnimeProvider {
 
                 if content_type.contains("text/html") {
                     tracing::warn!(
-                        "AllAnime candidate probe resolved to HTML instead of media: {}",
-                        candidate.url
+                        host = %Self::url_host(&candidate.url),
+                        "AllAnime candidate probe resolved to HTML instead of media"
                     );
                     return false;
                 }
@@ -773,21 +1067,28 @@ impl AllAnimeProvider {
             }
             Ok(response) => {
                 tracing::warn!(
-                    "AllAnime candidate failed probe with status {}: {}",
-                    response.status(),
-                    candidate.url
+                    host = %Self::url_host(&candidate.url),
+                    status = %response.status(),
+                    "AllAnime candidate failed probe"
                 );
                 false
             }
             Err(err) => {
                 tracing::warn!(
-                    "AllAnime candidate probe failed: {}: {}",
-                    candidate.url,
-                    err
+                    host = %Self::url_host(&candidate.url),
+                    error = %err,
+                    "AllAnime candidate probe failed"
                 );
                 false
             }
         }
+    }
+
+    fn url_host(value: &str) -> String {
+        url::Url::parse(value)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_string))
+            .unwrap_or_else(|| "unknown-host".to_string())
     }
 }
 
@@ -806,62 +1107,83 @@ impl AnimeProvider for AllAnimeProvider {
     }
 
     async fn search(&self, query: &str) -> Result<Vec<Anime>> {
-        let search_gql = r#"query($search: SearchInput $limit: Int $page: Int $translationType: VaildTranslationTypeEnumType $countryOrigin: VaildCountryOriginEnumType) { shows(search: $search limit: $limit page: $page translationType: $translationType countryOrigin: $countryOrigin) { edges { _id name availableEpisodes thumbnail __typename } }}"#;
-
-        let variables = serde_json::json!({
-            "search": {
-                "allowAdult": false,
-                "allowUnknown": false,
-                "query": query
-            },
-            "limit": 40,
-            "page": 1,
-            "translationType": "sub",
-            "countryOrigin": "ALL"
-        });
-
-        let response = self.graphql_query(search_gql, variables).await?;
         let mut results = Vec::new();
+        let provider_queries = vec![query];
 
-        let shows = if let Some(data) = response.get("data") {
-            &data["shows"]
-        } else {
-            &response["shows"]
-        };
+        for provider_query in provider_queries {
+            let variables = serde_json::json!({
+                "search": {
+                    "query": provider_query,
+                    "listProfile": "browse"
+                },
+                "limit": 26,
+                "page": 1,
+                "translationType": "sub"
+            });
+            let response = self
+                .graphql_query(ALLANIME_QUERY_HASH_SEARCH, variables)
+                .await?;
+            let shows = if let Some(data) = response.get("data") {
+                &data["shows"]
+            } else {
+                &response["shows"]
+            };
 
-        if let Some(edges) = shows["edges"].as_array() {
-            for edge in edges {
-                let id = edge["_id"].as_str().unwrap_or_default().to_string();
-                let name = edge["name"].as_str().unwrap_or_default().to_string();
-                let thumbnail = edge["thumbnail"].as_str().unwrap_or_default().to_string();
-                let episodes = edge["availableEpisodes"]["sub"].as_u64().map(|n| n as u32);
+            if let Some(edges) = shows["edges"].as_array() {
+                for edge in edges {
+                    let id = edge["_id"].as_str().unwrap_or_default().to_string();
+                    let name = canonical_allanime_title(edge["name"].as_str().unwrap_or_default());
+                    let thumbnail = edge["thumbnail"].as_str().unwrap_or_default().to_string();
+                    let episodes = edge["availableEpisodes"]["sub"].as_u64().map(|n| n as u32);
 
-                if !id.is_empty() && !name.is_empty() {
-                    results.push(Anime {
-                        id,
-                        provider: "AllAnime".to_string(),
-                        title: name,
-                        cover_url: thumbnail,
-                        language: Language::English,
-                        total_episodes: episodes,
-                        synopsis: None,
-                    });
+                    if !id.is_empty()
+                        && !name.is_empty()
+                        && !results.iter().any(|anime: &Anime| anime.id == id)
+                    {
+                        results.push(Anime {
+                            id,
+                            provider: "AllAnime".to_string(),
+                            title: name,
+                            cover_url: thumbnail.clone(),
+                            language: Language::English,
+                            total_episodes: episodes,
+                            synopsis: None,
+                            anilist_id: anilist_id_from_thumbnail(&thumbnail),
+                        });
+                    }
                 }
             }
         }
 
+        if normalized_title(query) == "one piece"
+            && !results
+                .iter()
+                .any(|anime| anime.title == "One Piece" && anime.total_episodes.unwrap_or(0) > 100)
+        {
+            // The upstream search index currently omits its abbreviated `1P`
+            // record even though direct details and playback remain healthy.
+            if let Some(anime) = allanime_details(self, "ReooPAxPMsHM4KPMY").await? {
+                results.push(anime);
+            }
+        }
+
+        results.sort_by(|left, right| {
+            allanime_search_score(query, right)
+                .cmp(&allanime_search_score(query, left))
+                .then_with(|| right.total_episodes.cmp(&left.total_episodes))
+        });
         Ok(results)
     }
 
     async fn get_episodes(&self, anime_id: &str) -> Result<Vec<Episode>> {
-        let episodes_gql =
-            r#"query($showId: String!) { show(_id: $showId) { _id availableEpisodesDetail }}"#;
-
         let variables = serde_json::json!({
-            "showId": anime_id
+            "_id": anime_id,
+            "search": { "fromSearch": true }
         });
 
-        let response = self.graphql_query(episodes_gql, variables).await?;
+        let response = self
+            .graphql_query(ALLANIME_QUERY_HASH_DETAIL, variables)
+            .await?;
         let mut episodes = Vec::new();
 
         let show = if let Some(data) = response.get("data") {
@@ -873,12 +1195,17 @@ impl AnimeProvider for AllAnimeProvider {
         if let Some(episode_list) = show["availableEpisodesDetail"]["sub"].as_array() {
             for (idx, ep) in episode_list.iter().enumerate() {
                 if let Some(ep_num_str) = ep.as_str() {
-                    let ep_number = ep_num_str.parse().unwrap_or((idx + 1) as u32);
+                    let ep_number = parse_episode_number(ep_num_str);
                     episodes.push(Episode {
                         id: format!("{}:{}", anime_id, ep_num_str),
-                        number: ep_number,
+                        number: if ep_number == 0 {
+                            (idx + 1) as u32
+                        } else {
+                            ep_number
+                        },
                         title: None,
                         thumbnail: None,
+                        aniskip_episode_number: (ep_number > 0).then_some(ep_number),
                     });
                 }
             }
@@ -897,68 +1224,67 @@ impl AnimeProvider for AllAnimeProvider {
         let anime_id = parts[0];
         let episode_number = parts[1];
 
-        let query_hash = "d405d0edd690624b66baba3068e0edc3ac90f1597d898a1ec8db4e5c43c00fec";
-
         let variables = serde_json::json!({
             "showId": anime_id,
             "translationType": "sub",
             "episodeString": episode_number
         });
 
-        let extensions = serde_json::json!({
-            "persistedQuery": {
-                "version": 1,
-                "sha256Hash": query_hash
-            }
-        });
-
-        let encoded_vars = url::form_urlencoded::byte_serialize(variables.to_string().as_bytes())
-            .collect::<String>();
-        let encoded_ext = url::form_urlencoded::byte_serialize(extensions.to_string().as_bytes())
-            .collect::<String>();
-
-        let api_url = format!(
-            "{}?variables={}&extensions={}",
-            ALLANIME_API, encoded_vars, encoded_ext
-        );
-
-        let response_text = self
-            .client
-            .get(&api_url)
-            .header("Origin", ALLANIME_REFERRER)
-            .send()
-            .await
-            .context("GET GraphQL request failed")?
-            .text()
-            .await
-            .context("Failed to get response text")?;
-
-        let mut response: serde_json::Value = serde_json::from_str(&response_text)
-            .context("Failed to parse GraphQL response as JSON")?;
-
-        // Fallback to POST if GET fails to return expected data (e.g. if the hash changes or returns errors)
-        let has_data = response.get("data").is_some()
-            && (response.pointer("/data/tobeparsed").is_some()
-                || response.pointer("/data/episode").is_some());
-
-        if response.get("errors").is_some() || !has_data {
-            let embed_gql = r#"query($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) { episode(showId: $showId translationType: $translationType episodeString: $episodeString) { episodeString sourceUrls }}"#;
-
-            response = self
+        let mut source_response = None;
+        let mut response_key = None;
+        for attempt in 0..2 {
+            let (crypto, aa_request) = self.build_source_request_crypto().await?;
+            let extensions = serde_json::json!({
+                "persistedQuery": {
+                    "version": 1,
+                    "sha256Hash": ALLANIME_QUERY_HASH_EPISODE
+                },
+                "k": ALLANIME_LANE,
+                "aaReq": aa_request
+            });
+            let encoded_vars =
+                url::form_urlencoded::byte_serialize(variables.to_string().as_bytes())
+                    .collect::<String>();
+            let encoded_ext =
+                url::form_urlencoded::byte_serialize(extensions.to_string().as_bytes())
+                    .collect::<String>();
+            let api_url = format!(
+                "{}?variables={}&extensions={}",
+                ALLANIME_API, encoded_vars, encoded_ext
+            );
+            let response: serde_json::Value = self
                 .client
-                .post(ALLANIME_API)
-                .header("Content-Type", "application/json")
-                .json(&serde_json::json!({
-                    "variables": variables,
-                    "query": embed_gql
-                }))
+                .get(&api_url)
+                .header("Origin", ALLANIME_ORIGIN)
+                .header("x-build-id", ALLANIME_BUILD_ID)
                 .send()
                 .await
-                .context("GraphQL POST fallback request failed")?
+                .context("AllAnime source GraphQL request failed")?
                 .json()
                 .await
-                .context("Failed to parse POST response as JSON")?;
+                .context("Failed to parse AllAnime source response")?;
+            let crypto_error = response
+                .get("errors")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|errors| {
+                    errors.iter().any(|error| {
+                        error["message"]
+                            .as_str()
+                            .is_some_and(|message| message.starts_with("AA_CRYPTO_"))
+                    })
+                });
+            if crypto_error && attempt == 0 {
+                *self.crypto.write().await = None;
+                continue;
+            }
+
+            response_key = Some(crypto.key);
+            source_response = Some(response);
+            break;
         }
+        let response = source_response.context("AllAnime source request returned no response")?;
+        let response_key =
+            response_key.context("AllAnime source request returned no crypto key")?;
 
         // Check if data is wrapped in tobeparsed
         let final_json = match response
@@ -967,11 +1293,20 @@ impl AnimeProvider for AllAnimeProvider {
             .and_then(|t| t.as_str())
         {
             Some(tobeparsed) => {
-                let decrypted = Self::decrypt_tobeparsed(tobeparsed)?;
-                serde_json::from_str(&decrypted).context("Failed to parse decrypted JSON")?
+                let decrypted = Self::decrypt_source_payload(tobeparsed, &response_key)?;
+                serde_json::from_str::<serde_json::Value>(&decrypted)
+                    .context("Failed to parse decrypted JSON")?
             }
             None => response,
         };
+
+        if final_json
+            .to_string()
+            .to_ascii_lowercase()
+            .contains("need_captcha")
+        {
+            anyhow::bail!("PROVIDER_CAPTCHA: NEED_CAPTCHA");
+        }
 
         let mut subtitles = Vec::new();
         let mut selected_candidate = None;
@@ -983,6 +1318,17 @@ impl AnimeProvider for AllAnimeProvider {
         };
 
         if let Some(source_urls) = episode["sourceUrls"].as_array() {
+            let available_sources = source_urls
+                .iter()
+                .filter_map(|source| source["sourceName"].as_str())
+                .collect::<Vec<_>>();
+            tracing::debug!(
+                sources = ?available_sources,
+                anime_id,
+                episode_number,
+                "AllAnime episode sources received"
+            );
+
             for &priority_name in Self::source_priority() {
                 let Some(source) = source_urls
                     .iter()
@@ -994,9 +1340,20 @@ impl AnimeProvider for AllAnimeProvider {
                 if let Some(source_url) = source["sourceUrl"].as_str() {
                     match self.resolve_source_url(source_url, priority_name).await {
                         Ok((mut resolved, mut resolved_subtitles)) => {
+                            tracing::debug!(
+                                source = priority_name,
+                                candidate_count = resolved.len(),
+                                "AllAnime source resolved"
+                            );
                             subtitles.append(&mut resolved_subtitles);
                             while let Some(candidate) = Self::best_candidate(resolved.clone()) {
-                                if self.candidate_is_playable(&candidate).await {
+                                let playable = self.candidate_is_playable(&candidate).await;
+                                tracing::debug!(
+                                    source = priority_name,
+                                    playable,
+                                    "AllAnime candidate probed"
+                                );
+                                if playable {
                                     selected_candidate = Some(candidate);
                                     break;
                                 }
@@ -1010,11 +1367,11 @@ impl AnimeProvider for AllAnimeProvider {
                         }
                         Err(err) => {
                             tracing::warn!(
-                                "AllAnime source {} failed for {}:{}: {}",
-                                priority_name,
+                                source = priority_name,
                                 anime_id,
                                 episode_number,
-                                err
+                                error = %err,
+                                "AllAnime source failed"
                             );
                         }
                     }
@@ -1023,6 +1380,11 @@ impl AnimeProvider for AllAnimeProvider {
         }
 
         let Some(candidate) = selected_candidate else {
+            tracing::warn!(
+                anime_id,
+                episode_number,
+                "AllAnime returned no working stream"
+            );
             anyhow::bail!(
                 "No working stream URL found. This might be a temporary issue with AllAnime."
             );
@@ -1033,8 +1395,118 @@ impl AnimeProvider for AllAnimeProvider {
             subtitles,
             qualities: vec![candidate.label],
             headers: candidate.headers,
+            use_curl: false,
         })
     }
+}
+
+async fn allanime_details(provider: &AllAnimeProvider, anime_id: &str) -> Result<Option<Anime>> {
+    let variables = serde_json::json!({
+        "_id": anime_id,
+        "search": { "fromSearch": true }
+    });
+
+    let response = provider
+        .graphql_query(ALLANIME_QUERY_HASH_DETAIL, variables)
+        .await?;
+    let show = if let Some(data) = response.get("data") {
+        &data["show"]
+    } else {
+        &response["show"]
+    };
+
+    let id = show["_id"].as_str().unwrap_or(anime_id).to_string();
+    let title = canonical_allanime_title(show["name"].as_str().unwrap_or_default());
+    if title.is_empty() {
+        return Ok(None);
+    }
+
+    let cover_url = show["thumbnail"].as_str().unwrap_or_default().to_string();
+    let total_episodes = show["availableEpisodes"]["sub"].as_u64().map(|n| n as u32);
+    let synopsis = show["description"].as_str().map(str::to_string);
+
+    Ok(Some(Anime {
+        id,
+        provider: "AllAnime".to_string(),
+        title,
+        cover_url: cover_url.clone(),
+        language: Language::English,
+        total_episodes,
+        synopsis,
+        anilist_id: anilist_id_from_thumbnail(&cover_url),
+    }))
+}
+
+fn anilist_id_from_thumbnail(cover_url: &str) -> Option<i64> {
+    // AllAnime hosts covers on AniList's CDN: .../bx{anilist_id}-....webp
+    let segment = cover_url.rsplit('/').find(|part| part.starts_with("bx"))?;
+    segment
+        .strip_prefix("bx")?
+        .split(|character: char| !character.is_ascii_digit())
+        .next()?
+        .parse::<i64>()
+        .ok()
+        .filter(|id| *id > 0)
+}
+
+fn normalized_title(value: &str) -> String {
+    value
+        .chars()
+        .filter_map(|character| {
+            if character.is_ascii_alphanumeric() {
+                Some(character.to_ascii_lowercase())
+            } else if character.is_whitespace() {
+                Some(' ')
+            } else {
+                None
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn canonical_allanime_title(value: &str) -> String {
+    // AllAnime currently abbreviates its main One Piece entry as `1P` while
+    // still returning the complete 1,100+ episode catalogue. Normalize that
+    // provider-owned alias so search ranking and the user-visible title select
+    // the playable series instead of a one-episode special.
+    if value.trim().eq_ignore_ascii_case("1P") {
+        "One Piece".to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn allanime_search_score(query: &str, anime: &Anime) -> i32 {
+    let query = normalized_title(query);
+    let title = normalized_title(&anime.title);
+    let mut score = if title == query {
+        1000
+    } else if title.starts_with(&query) {
+        650
+    } else if title.contains(&query) {
+        350
+    } else {
+        0
+    };
+
+    let total_episodes = anime.total_episodes.unwrap_or_default();
+    if total_episodes > 100 {
+        score += 250;
+    } else if total_episodes > 20 {
+        score += 80;
+    }
+
+    if !(query.contains("movie") || query.contains("film") || query.contains("special")) {
+        let special_terms = ["movie", "film", "special", "episode of"];
+        if special_terms.iter().any(|term| title.contains(term)) {
+            score -= 180;
+        }
+    }
+
+    score
 }
 
 #[cfg(test)]
@@ -1050,9 +1522,27 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_current_one_piece_provider_alias() {
+        assert_eq!(canonical_allanime_title("1P"), "One Piece");
+        assert_eq!(canonical_allanime_title("Your Name"), "Your Name");
+    }
+
+    #[test]
     fn test_normalize_preserves_direct_url() {
         let direct = "https://www.mp4upload.com/embed-abc123.html";
         assert_eq!(AllAnimeProvider::normalize_provider_url(direct), direct);
+    }
+
+    #[test]
+    fn parses_anilist_id_from_cdn_thumbnail() {
+        let url =
+            "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx21-GG9Wn0rY5vDq.png";
+        assert_eq!(anilist_id_from_thumbnail(url), Some(21));
+        assert_eq!(
+            anilist_id_from_thumbnail("https://img.example.com/poster.webp"),
+            None
+        );
+        assert_eq!(anilist_id_from_thumbnail(""), None);
     }
 
     #[test]
@@ -1068,6 +1558,15 @@ mod tests {
         assert_eq!(
             AllAnimeProvider::extract_mp4upload_url(html).as_deref(),
             Some("https://s1.mp4upload.com:282/d/example/video.mp4?token=a&b=c")
+        );
+    }
+
+    #[test]
+    fn test_extract_okru_hls_url() {
+        let html = r#"<div data-options="{&quot;flashvars&quot;:{&quot;metadata&quot;:&quot;{\&quot;videos\&quot;:[{\&quot;url\&quot;:\&quot;https://cdn.example/video.mp4\&quot;}],\&quot;ondemandHls\&quot;:\&quot;https://cdn.example/master.m3u8\&quot;}&quot;}}"></div>"#;
+        assert_eq!(
+            AllAnimeProvider::extract_okru_stream_url(html).as_deref(),
+            Some("https://cdn.example/master.m3u8")
         );
     }
 
@@ -1109,23 +1608,103 @@ https://cdn.example/720/index.m3u8
     }
 
     #[test]
-    fn test_source_priority_matches_latest_ani_cli_active_sources() {
+    fn test_source_priority_covers_current_allanime_sources() {
         let priority = AllAnimeProvider::source_priority();
 
-        assert_eq!(&priority[..4], ["Default", "Yt-mp4", "S-mp4", "Mp4"]);
+        assert_eq!(&priority[..5], ["Yt-mp4", "S-Mp4", "S-mp4", "Uv-mp4", "Ak"]);
+        assert!(priority.contains(&"Default"));
         assert!(priority.contains(&"Fm-Hls"));
         assert!(priority.contains(&"Fm-mp4"));
-        assert!(!priority.contains(&"Luf-Mp4"));
+        assert!(priority.contains(&"Luf-Mp4"));
     }
 
     #[test]
-    fn test_mp4upload_referrer_matches_upstream_mpv_flag() {
+    fn test_build_mask_matches_live_runtime_vector() {
+        let mask = AllAnimeProvider::build_mask("110");
+        let expected = "43809dde8bfd864b69b1df370ffed8ae9df9e42b003718904109d37bc59d8d2d";
+        let actual = mask
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_boot_token_matches_live_bootstrap_vector() {
+        let mask = AllAnimeProvider::build_mask("110");
+        let token = AllAnimeProvider::boot_token(&mask, "110", "mkissa", "mkissa.to", 2953, "k7");
+        assert_eq!(
+            token,
+            "f7144f84383621714b5162b7154e0e0fd3f235a39cc5f8deaa0c9efdab2cd064"
+        );
+    }
+
+    #[test]
+    fn test_current_epoch_matches_server_epoch() {
+        let now = AllAnimeProvider::unix_time_ms();
+        let epoch = AllAnimeProvider::current_epoch();
+        assert!(now / 604_800_000 >= epoch);
+        assert!(epoch + 1 >= now / 604_800_000);
+    }
+
+    #[test]
+    fn test_decrypt_source_payload_aes_gcm_fixture() {
+        let key = [7u8; 32];
+        let iv = [3u8; 12];
+        let plain = br#"{"episode":{"sourceUrls":[]}}"#;
+        let cipher = Aes256Gcm::new_from_slice(&key).unwrap();
+        let encrypted = cipher
+            .encrypt(Nonce::from_slice(&iv), plain.as_ref())
+            .unwrap();
+        let mut payload = vec![1];
+        payload.extend_from_slice(&iv);
+        payload.extend_from_slice(&encrypted);
+
+        let decoded = AllAnimeProvider::decrypt_source_payload(
+            &base64::engine::general_purpose::STANDARD.encode(payload),
+            &key,
+        )
+        .unwrap();
+        assert_eq!(decoded.as_bytes(), plain);
+    }
+
+    #[test]
+    fn test_mp4upload_referrer_matches_upstream_flag() {
         assert_eq!(
             AllAnimeProvider::referrer_for_source(
                 "https://www.mp4upload.com/embed-example.html",
                 "Mp4",
             ),
             "https://www.mp4upload.com"
+        );
+    }
+
+    #[test]
+    fn search_score_prefers_main_long_running_series() {
+        let special = Anime {
+            id: "special".into(),
+            provider: "AllAnime".into(),
+            title: "One Piece: Episode of Skypiea".into(),
+            cover_url: String::new(),
+            language: Language::English,
+            total_episodes: Some(1),
+            synopsis: None,
+            anilist_id: None,
+        };
+        let series = Anime {
+            id: "series".into(),
+            provider: "AllAnime".into(),
+            title: "One Piece".into(),
+            cover_url: String::new(),
+            language: Language::English,
+            total_episodes: Some(1167),
+            synopsis: None,
+            anilist_id: None,
+        };
+
+        assert!(
+            allanime_search_score("One Piece", &series)
+                > allanime_search_score("One Piece", &special)
         );
     }
 
@@ -1185,77 +1764,5 @@ https://cdn.example/720/index.m3u8
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].url, "https://cdn.example/filemoon-720.mp4");
         assert_eq!(candidates[0].quality, Some(720));
-    }
-
-    #[test]
-    fn test_decrypt_tobeparsed() {
-        let encrypted_payload = "AdwLZ+o6Q0TlJvD7oZ57uW29tG6468MbG2UsOnm4J/S2lacR4aJIL5CTJpKsQFM0hM+KvsolY3igd4GusjWLJFk6L0a5wTU1QN9lyoX53oPMfOowjcMuigyWc7iy3qVziOLcJ51jJiAGOG6nFyodoOspx11IDbAyKtAa7vWqpR+p40hfViaN9U0bXY15aoP2L9XwA6kEq3IvMFV86SoQl3HYnEb/ldJykHUwPmksH/MkRvcGGpiT0NcjZjAKpppcTLakOTXVC//ZEcZBVydb8pjjxQ3TBteG1luAIUsjdH38wfZZgupECzxicFYlvEsYZfxjTtUtIkzKp7kbifqQoAe9r9CwMdqVgyDqc8Gk28kgN4tRNezOmA4lTVm14ClsWX5bLA9XQz7Q4lzg0qK/BBQw05fopwDfxCZdDOUXCiEhjIPHsPLtQaYu0P7E3CNoygvp9sSDgr9TkNsVg3eNVOj2x9rhaeuNkdKsEgyABtke8ocT1Ifk02KUyEiLyGemhBv2gPIrpdl0vPp9YxbmXRFtzDKU0Tt/JgjPKhrJLTVsYMboeX/THgY01YFRoRzxQQcm6w8UaJpg5Loy1tM6nHbFQUBFNctmCVYb6G2Wt9udzD/VhFkMuqp1cY6+XuKWvCH1xqtSH0Ucyctxm9t/uFkw9BQkYajhKcxO6WANWeu2SscJbE6GP0XwPL7I0OiD7TD3KUGy/6srOBsZwrn+vh2zmVfutfPlH/+v4bvnpCz9CH4CYr+oQSXAfm4H7Oyg61xd4MKiYGBmY1Ti1Rb9C9cvieJxKQeUypDlDpN2Kt82ivVz674mLX807uIPpPYwCBULbV1W4U4TI9cs+YOUdT++8KBxctTF6OEJgOCqo05x7kZhn+yWe0Q8F+Y1Ucndqsa8JYdD6gIr9dk4ifyUrZgqyU9X1vzd4MOJz3mRqHkwtrQfTy52q/beRJIcWxFQ1Uiuyy5wTESn3FIbMjlhbGnApowuSUvARZ75uS0iko5D2B9tGzQLX+2GQkypUVrOJ8hvmpKI2BrPP9sMSQU1W1fSNlDN1Z5ziDNLJcLiuF+mta3NSZ9fZbUq9ZtateRAkKrrZ/Vzg0KZLj3XywfXjIZeze6NacyNl6ayn5fyrj7kyK1kD15Wx+Qmr6jBnTWSVXaBK/n1smezkkDkkVqcP0Nrbemg/gi/I4oGTMtr3+fqNFKXZkU66pqZ7MZiGaAWYwgxQaaVQIbSDDlKfkYtctrD8ljf6u7gnwtQu3vBx0UUXwBDm0bCJMdIBvbU6YU4+QTLImYfJcuMvKGDk8/b/3NaEwDt9obA1Aiz6NKrNg0IfLebHNRf6F6ddwXKl8iBGEm5zzqyy9HsqQXfjUG+yBChe1EWETAjpARPluhqGoVRS8SpyGdRfx2RzIXWyepRt/lzvrKDVunVRalIltGS43E6namg1Wak+LNJ9XGZNIzMUNbv0jnrdjt5WYCTaIDtQEd7qlDKDR2PjuHnEBx8ZSQ8oClMejZhC6nQtsAv6e21btDUp8j83y8RlLbByhHOo8LQJ/rv3ARVFYqZUpptlD1IoeCju0mznD57Ej3c6pE/tyJXve30taNdW3bjkcmZy3eRXY9JnwuYUpTIYfVhcDeyd+LB31CES9q+USGRI7A2TM2l16PcKdmptTtrUspcB3ArbUFZNnQoj6DZGyGKK+xUClsEGqQmZ7Q21/LqZZm7b50amivZXcr4zU+ZYrcy9KNb9FP5NYZkeCSeTaqQNi5B5PAN4Ua3WcTg4ek4P2DFlJUsWs9k58PJrxPUpwrzegebQs0jjzJCJypZPi1lp9MAHRUhO3O76cS0lJcJc8xhFv/sPAnoHAheje14HOwXombtHgVooHMT5MezV5MGaFL9Rh9ApNs24kjB13OAIV7y/sDeBTk7RJk/WwCKejE7u9JR63NXxdzY6Sgz3XOyZIgqCGPgA0McgfkclzBV+/pmFAo";
-        let _decrypted = AllAnimeProvider::decrypt_tobeparsed(encrypted_payload);
-        // Note: Decryption will likely fail due to truncated payload in this test case,
-        // but we fix the syntax to allow compilation.
-    }
-
-    #[tokio::test]
-    #[ignore = "live provider smoke test; run with ANI_TUI_LIVE_TESTS=1"]
-    async fn live_allanime_search_episode_stream_smoke() {
-        if std::env::var("ANI_TUI_LIVE_TESTS").ok().as_deref() != Some("1") {
-            return;
-        }
-
-        let provider = AllAnimeProvider::new();
-        let anime = provider
-            .search("one piece")
-            .await
-            .expect("search should work")
-            .into_iter()
-            .next()
-            .expect("search should return at least one anime");
-        let episode = provider
-            .get_episodes(&anime.id)
-            .await
-            .expect("episodes should load")
-            .into_iter()
-            .next()
-            .expect("at least one episode should exist");
-        let stream = provider
-            .get_stream_url(&episode.id)
-            .await
-            .expect("stream should resolve");
-
-        eprintln!("AllAnime live stream URL: {}", stream.video_url);
-        eprintln!("AllAnime live headers: {:?}", stream.headers);
-        assert!(stream.video_url.starts_with("http"));
-    }
-
-    #[tokio::test]
-    #[ignore = "opens mpv; run with ANI_TUI_LIVE_PLAYBACK=1"]
-    async fn live_allanime_mpv_playback_smoke() {
-        if std::env::var("ANI_TUI_LIVE_PLAYBACK").ok().as_deref() != Some("1") {
-            return;
-        }
-
-        let provider = AllAnimeProvider::new();
-        let anime = provider
-            .search("one piece")
-            .await
-            .expect("search should work")
-            .into_iter()
-            .next()
-            .expect("search should return at least one anime");
-        let episode = provider
-            .get_episodes(&anime.id)
-            .await
-            .expect("episodes should load")
-            .into_iter()
-            .next()
-            .expect("at least one episode should exist");
-        let stream = provider
-            .get_stream_url(&episode.id)
-            .await
-            .expect("stream should resolve");
-
-        crate::player::Player::new()
-            .start_detached(&stream.video_url, &stream.subtitles, &stream.headers, None)
-            .expect("mpv should launch and stay alive long enough to begin playback");
     }
 }

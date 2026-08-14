@@ -27,6 +27,8 @@ config.toml
 .ruff_cache/
 .venv/
 AGENTS.md
+.playwright-mcp/
+node_modules/
 
 daytona
 daytona.yaml

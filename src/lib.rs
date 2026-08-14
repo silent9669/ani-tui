@@ -5,5 +5,6 @@ pub mod image_manager;
 pub mod metadata;
 pub mod player;
 pub mod providers;
+pub mod skip_times;
 pub mod ui;
 pub mod update;

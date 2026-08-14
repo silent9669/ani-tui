@@ -1885,6 +1885,7 @@ impl App {
                 language: provider.language(),
                 total_episodes: None,
                 synopsis: None,
+                anilist_id: None,
             };
 
             self.select_anime(anime).await?;
@@ -2666,6 +2667,10 @@ impl App {
 
         let playback_title = anime.title.clone();
         let playback_episode_number = episode.number;
+        let anilist_id = anime.anilist_id;
+        let skip_episode_number = episode
+            .aniskip_episode_number
+            .unwrap_or(playback_episode_number);
 
         // Resolve stream and launch playback in the background, then surface the result on tick.
         self.playback_worker = Some(tokio::spawn(async move {
@@ -2673,6 +2678,11 @@ impl App {
                 "AllAnime" => Box::new(crate::providers::allanime::AllAnimeProvider::new()),
                 "KKPhim" => Box::new(crate::providers::kkphim::KkphimProvider::new()),
                 "OPhim" => Box::new(crate::providers::ophim::OphimProvider::new()),
+                "AnimeGG" => Box::new(crate::providers::animegg::AnimeGgProvider::new()),
+                "MovieBox" => Box::new(crate::providers::moviebox::MovieBoxProvider::new()),
+                "AniDB" => Box::new(crate::providers::anidb::AniDbProvider::new()),
+                "Niniyo" => Box::new(crate::providers::niniyo::NiniyoProvider::new()),
+                "AniZone" => Box::new(crate::providers::anizone::AniZoneProvider::new()),
                 _ => anyhow::bail!("Provider {} is not available", provider_name),
             };
 
@@ -2685,26 +2695,44 @@ impl App {
                 anyhow::bail!("{} returned an empty stream URL", provider_name);
             }
 
+            let skip_times =
+                match resolve_skip_times(anilist_id, &playback_title, skip_episode_number).await {
+                    Ok(ranges) => ranges,
+                    Err(error) => {
+                        tracing::warn!("AniSkip unavailable: {error:#}");
+                        Vec::new()
+                    }
+                };
+
             Player::new()
                 .start_detached(
                     &stream_info.video_url,
                     &stream_info.subtitles,
                     &stream_info.headers,
                     None,
+                    &skip_times,
                 )
                 .with_context(|| format!("Failed to launch player for {}", playback_title))?;
 
-            Ok(format!(
-                "Started: {} Ep {}",
-                playback_title, playback_episode_number
-            ))
+            let mut message = format!("Started: {} Ep {}", playback_title, playback_episode_number);
+            if !skip_times.is_empty() {
+                message.push_str(&format!(
+                    " (auto-skip: {})",
+                    skip_times
+                        .iter()
+                        .map(|range| range.skip_type.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+
+            Ok(message)
         }));
     }
 
     fn show_toast(&mut self, message: String, duration_secs: u64) {
         self.toast = Some(Toast::new(message, duration_secs));
     }
-
     async fn on_tick(&mut self) -> Result<()> {
         // Check search worker
         if let Some(handle) = &mut self.search_worker {
@@ -2961,4 +2989,23 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+async fn resolve_skip_times(
+    anilist_id: Option<i64>,
+    title: &str,
+    episode_number: u32,
+) -> anyhow::Result<Vec<crate::skip_times::SkipTime>> {
+    if let Some(anilist_id) = anilist_id {
+        return crate::skip_times::fetch_skip_times(anilist_id, episode_number).await;
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(6))
+        .build()
+        .context("failed to build AniList client")?;
+    let Some(anilist_id) = crate::skip_times::resolve_anilist_id_by_title(&client, title).await?
+    else {
+        return Ok(Vec::new());
+    };
+    crate::skip_times::fetch_skip_times(anilist_id, episode_number).await
 }

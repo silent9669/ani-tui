@@ -18,13 +18,28 @@ pub struct Config {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourcesConfig {
     #[serde(default = "default_true")]
+    pub anizone: bool,
+
+    #[serde(default = "default_true")]
+    pub anidb: bool,
+
+    #[serde(default = "default_true")]
     pub allanime: bool,
+
+    #[serde(default = "default_true")]
+    pub animegg: bool,
+
+    #[serde(default = "default_true")]
+    pub moviebox: bool,
 
     #[serde(default = "default_true")]
     pub kkphim: bool,
 
     #[serde(default = "default_true")]
     pub ophim: bool,
+
+    #[serde(default = "default_true")]
+    pub niniyo: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,9 +68,14 @@ fn default_theme() -> ThemeConfig {
 impl Default for SourcesConfig {
     fn default() -> Self {
         Self {
+            anizone: true,
+            anidb: true,
             allanime: true,
+            animegg: true,
+            moviebox: true,
             kkphim: true,
             ophim: true,
+            niniyo: true,
         }
     }
 }

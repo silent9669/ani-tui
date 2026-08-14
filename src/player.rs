@@ -17,6 +17,7 @@ impl Player {
         subtitles: &[crate::providers::Subtitle],
         headers: &HashMap<String, String>,
         start_time: Option<u64>,
+        skip_times: &[crate::skip_times::SkipTime],
     ) -> Result<()> {
         let player_command = Self::resolve_player_command()?;
 
@@ -28,12 +29,19 @@ impl Player {
             .open(&log_file)
             .context("Failed to open mpv log file")?;
 
+        let ipc_path = if skip_times.is_empty() {
+            None
+        } else {
+            Some(Self::ipc_path())
+        };
+
         let mut cmd = Self::build_command(
             &player_command,
             video_url,
             subtitles,
             headers,
             start_time,
+            ipc_path.as_deref(),
             Some(&log_file),
         );
         cmd.stdout(Stdio::from(file.try_clone()?));
@@ -72,7 +80,124 @@ impl Player {
             anyhow::bail!(message);
         }
 
+        if let (Some(ipc_path), false) = (ipc_path, skip_times.is_empty()) {
+            let ranges = skip_times
+                .iter()
+                .map(|range| (range.skip_type.clone(), range.start_time, range.end_time))
+                .collect::<Vec<_>>();
+            let log_path = std::env::temp_dir().join("ani-tui-skip.log");
+            std::thread::spawn(move || {
+                Self::watch_skip_ranges(&ipc_path, &ranges, &log_path);
+            });
+        }
+
         Ok(())
+    }
+
+    /// Blocking watcher: connect to mpv IPC, seek past intro/outro ranges once each.
+    fn watch_skip_ranges(
+        ipc_path: &str,
+        ranges: &[(String, f64, f64)],
+        log_path: &std::path::Path,
+    ) {
+        fn log(log_path: &std::path::Path, message: &str) {
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(log_path)
+            {
+                use std::io::Write;
+                let _ = writeln!(file, "[ani-tui skip] {message}");
+            }
+        }
+
+        let mut mpv = None;
+        for attempt in 0..20 {
+            match mpvipc::Mpv::connect(ipc_path) {
+                Ok(instance) => {
+                    mpv = Some(instance);
+                    break;
+                }
+                Err(_) => std::thread::sleep(Duration::from_millis(300)),
+            }
+            if attempt == 19 {
+                log(log_path, "could not connect to mpv IPC; skipping disabled");
+                return;
+            }
+        }
+        let Some(mut mpv) = mpv else { return };
+
+        if mpv.observe_property(1, "playback-time").is_err() {
+            log(log_path, "failed to observe playback-time");
+            return;
+        }
+
+        let mut skipped = vec![false; ranges.len()];
+        while let Ok(event) = mpv.event_listen() {
+            match event {
+                mpvipc::Event::EndFile | mpvipc::Event::Shutdown => break,
+                mpvipc::Event::PropertyChange {
+                    property: mpvipc::Property::PlaybackTime(Some(position)),
+                    ..
+                } => {
+                    for (index, (_, start, end)) in ranges.iter().enumerate() {
+                        if skipped[index] || position < start - 0.3 || position >= *end {
+                            continue;
+                        }
+                        let target = end + 0.3;
+                        // Issue the seek over a fresh IPC connection: command
+                        // responses only collide with the property-event stream
+                        // when a connection both observes and commands.
+                        let seek_ok = mpvipc::Mpv::connect(ipc_path)
+                            .ok()
+                            .map(|command_mpv| {
+                                let result = command_mpv
+                                    .seek(target, mpvipc::SeekOptions::Absolute)
+                                    .is_ok();
+                                drop(command_mpv);
+                                result
+                            })
+                            .unwrap_or(false);
+                        log(
+                            log_path,
+                            &format!(
+                                "{} {:.1}s-{:.1}s skipped -> {:.1}s (was at {:.1}s, seek {})",
+                                ranges[index].0,
+                                start,
+                                end,
+                                target,
+                                position,
+                                if seek_ok { "ok" } else { "result unknown" }
+                            ),
+                        );
+                        skipped[index] = true;
+                    }
+                    if skipped.iter().all(|flag| *flag) {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        #[cfg(unix)]
+        {
+            let _ = std::fs::remove_file(ipc_path);
+        }
+    }
+
+    fn ipc_path() -> String {
+        #[cfg(unix)]
+        {
+            std::env::temp_dir()
+                .join(format!("ani-tui-mpv-{}.sock", std::process::id()))
+                .display()
+                .to_string()
+        }
+        #[cfg(windows)]
+        {
+            format!(r"\\.\pipe\ani-tui-mpv-{}", std::process::id())
+        }
     }
 
     fn build_command(
@@ -81,6 +206,7 @@ impl Player {
         subtitles: &[crate::providers::Subtitle],
         headers: &HashMap<String, String>,
         start_time: Option<u64>,
+        ipc_path: Option<&str>,
         log_file: Option<&std::path::Path>,
     ) -> Command {
         let mut cmd = Command::new(player_command);
@@ -89,6 +215,10 @@ impl Player {
 
         if let Some(start) = start_time {
             cmd.arg(format!("--start={}", start));
+        }
+
+        if let Some(ipc_path) = ipc_path {
+            cmd.arg(format!("--input-ipc-server={}", ipc_path));
         }
 
         let mut header_fields = Vec::new();
@@ -293,6 +423,7 @@ mod tests {
             &[],
             &HashMap::new(),
             None,
+            Some("/tmp/ani-tui-mpv.sock"),
             None,
         );
         let args: Vec<_> = cmd
@@ -302,6 +433,7 @@ mod tests {
 
         assert!(args.contains(&"--tls-verify=no".to_string()));
         assert!(args.contains(&"--force-window=immediate".to_string()));
+        assert!(args.contains(&"--input-ipc-server=/tmp/ani-tui-mpv.sock".to_string()));
     }
 
     #[test]
